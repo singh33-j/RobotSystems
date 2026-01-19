@@ -1,5 +1,7 @@
 import os
 
+on_the_robot = os.path.exists("/proc/device-tree")
+
 class Devices():
     HAT_DEVICE_TREE = "/proc/device-tree/"
     HAT_UUIDs = [
@@ -28,6 +30,15 @@ class Devices():
     motor_mode = 1
 
     def __init__(self):
+        if not on_the_robot:
+            self.name = "sim_robot_hat"
+            self.product_id = 0
+            self.product_ver = 0
+            self.uuid = ""
+            self.vendor = "simulation"
+            self.spk_en = 0
+            self.motor_mode = 1
+            return
         hat_path = None
         for file in os.listdir('/proc/device-tree/'):
             if 'hat' in file:

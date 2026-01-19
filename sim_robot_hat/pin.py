@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 from .basic import _Basic_class
-import gpiozero  # https://gpiozero.readthedocs.io/en/latest/installing.html
-from gpiozero import OutputDevice, InputDevice, Button
+#import gpiozero  # https://gpiozero.readthedocs.io/en/latest/installing.html
+#from gpiozero import OutputDevice, InputDevice, Button
 
 
 class Pin(_Basic_class):
@@ -97,11 +97,10 @@ class Pin(_Basic_class):
         self._info("Pin init finished.")
 
     def close(self):
-        self.gpio.close()
+        pass
 
     def deinit(self):
-        self.gpio.close()
-        self.gpio.pin_factory.close()
+        pass
 
     def setup(self, mode, pull=None, active_state=None):
         """
@@ -112,33 +111,9 @@ class Pin(_Basic_class):
         :param pull: pin pull up/down(PUD_UP/PUD_DOWN/PUD_NONE)
         :type pull: int
         """
-        # check mode
-        if mode in [None, self.OUT, self.IN]:
-            self._mode = mode
-        else:
-            raise ValueError(
-                f'mode param error, should be None, Pin.OUT, Pin.IN')
-        # check pull
-        if pull in [self.PULL_NONE, self.PULL_DOWN, self.PULL_UP]:
-            self._pull = pull
-        else:
-            raise ValueError(
-                f'pull param error, should be None, Pin.PULL_NONE, Pin.PULL_DOWN, Pin.PULL_UP'
-            )
-        #
-        if self.gpio != None:
-            if self.gpio.pin != None:
-                self.gpio.close()
-        #
-        if mode in [None, self.OUT]:
-            self.gpio = OutputDevice(self._pin_num)
-        else:
-            if pull == self.PULL_UP:
-                self.gpio = InputDevice(self._pin_num, pull_up=True, active_state=None)
-            elif pull == self.PULL_DOWN:
-                self.gpio = InputDevice(self._pin_num, pull_up=False, active_state=None)
-            else:
-                self.gpio = InputDevice(self._pin_num, pull_up=None, active_state=active_state)
+        self._mode = mode
+        self._pull = pull
+        pass
 
     def dict(self, _dict=None):
         """
@@ -179,21 +154,10 @@ class Pin(_Basic_class):
         :rtype: int
         """
         if value == None:
-            if self._mode in [None, self.OUT]:
-                self.setup(self.IN)
-            result = self.gpio.value
-            self._debug(f"read pin {self.gpio.pin}: {result}")
-            return result
+            return self._value
         else:
-            if self._mode in [self.IN]:
-                self.setup(self.OUT)
-            if bool(value):
-                value = 1
-                self.gpio.on()
-            else:
-                value = 0
-                self.gpio.off()
-            return value
+            self._value = 1 if value else 0
+            return self._value
 
     def on(self):
         """

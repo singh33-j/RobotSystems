@@ -6,8 +6,6 @@ class ADC(I2C):
     """
     Analog to digital converter
     """
-    ADDR = [0x14, 0x15]
-
     def __init__(self, chn, address=None, *args, **kwargs):
         """
         Analog to digital converter
@@ -15,12 +13,6 @@ class ADC(I2C):
         :param chn: channel number (0-7/A0-A7)
         :type chn: int/str
         """
-        if address is not None:
-            super().__init__(address, *args, **kwargs)
-        else:
-            super().__init__(self.ADDR, *args, **kwargs)
-        self._debug(f'ADC device address: 0x{self.address:02X}')
-
         if isinstance(chn, str):
             # If chn is a string, assume it's a pin name, remove A and convert to int
             if chn.startswith("A"):
@@ -33,9 +25,7 @@ class ADC(I2C):
             raise ValueError(
                 f'ADC channel should be between [0, 7], not "{chn}"')
         chn = 7 - chn
-        # Convert to Register value
-        self.chn = chn | 0x10
-
+        self.chn = chn
     def read(self):
         """
         Read the ADC value
@@ -44,14 +34,7 @@ class ADC(I2C):
         :rtype: int
         """
         # Write register address
-        self.write([self.chn, 0, 0])
-        # Read values
-        msb, lsb = super().read(2)
-
-        # Combine MSB and LSB
-        value = (msb << 8) + lsb
-        self._debug(f"Read value: {value}")
-        return value
+        return 0
 
     def read_voltage(self):
         """

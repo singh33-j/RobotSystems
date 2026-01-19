@@ -4,6 +4,11 @@ from .pwm import PWM
 from .pin import Pin
 from .filedb import fileDB
 
+User = None
+Userhome = None
+config_file = None
+
+
 class Motor():
     """Motor"""
     PERIOD = 4095

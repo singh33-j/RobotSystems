@@ -7,11 +7,9 @@ from .filedb import fileDB
 import os
 
 # user and User home directory
-User = os.popen('echo ${SUDO_USER:-$LOGNAME}').readline().strip()
-UserHome = os.popen('getent passwd %s | cut -d: -f 6' %
-                    User).readline().strip()
-config_file = '%s/.config/robot-hat/robot-hat.conf' % UserHome
-
+User = None
+Userhome = None
+config_file = None
 
 class Robot(_Basic_class):
     """
