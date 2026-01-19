@@ -302,6 +302,8 @@ class Picarx(object):
         Perform a 3-point (K) turn.
         """
         self.set_dir_servo_angle(0)
+        time.sleep(1)
+        
         logging.debug("3PT | Step 1: Forward with left steering")
         self.set_dir_servo_angle(30)
         self.forward(speed)
