@@ -302,7 +302,7 @@ class Picarx(object):
             time.sleep(duration)
             self.stop()
             time.sleep(0.5)
-        @log_on_start(logging.DEBUG, "Parallel parking started")
+    @log_on_start(logging.DEBUG, "Parallel parking started")
     @log_on_error(logging.DEBUG, "Error during parallel parking")
     @log_on_end(logging.DEBUG, "Parallel parking completed")
 
@@ -506,9 +506,11 @@ if __name__ == "__main__":
 
     px.parallel_park(
         speed=35,
-        duration=1.0
+        forward_time=1.0,
+        reverse_time=1.0
     )
 
     time.sleep(1)
     px.stop()
+
 
