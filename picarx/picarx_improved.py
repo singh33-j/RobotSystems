@@ -317,7 +317,13 @@ class Picarx(object):
         time.sleep(settle_time)
 
         logging.debug("3PT | Step 3: Straighten out")
-        self.set_dir_servo_angle(10)
+        self.set_dir_servo_angle(5)
+        self.forward(speed)
+        time.sleep(turn_time * 0.75)
+        self.stop()
+        
+        logging.debug("4PT | Step 4: Go Straight")
+        self.set_dir_servo_angle(0)
         self.forward(speed)
         time.sleep(turn_time * 0.75)
         self.stop()
