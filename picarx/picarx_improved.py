@@ -325,7 +325,7 @@ class Picarx(object):
     @log_on_start(logging.DEBUG, "Parallel parking started")
     @log_on_error(logging.DEBUG, "Error during parallel parking")
     @log_on_end(logging.DEBUG, "Parallel parking completed")
-    
+
     def parallel_park(
         self,
         speed=35,
@@ -518,17 +518,16 @@ class Picarx(object):
         self.ultrasonic.close()
 
     
-
 if __name__ == "__main__":
     px = Picarx()
 
-    px.parallel_park(
+    px.three_point_turn(
         speed=35,
-        forward_time=1.0,
-        reverse_time=1.0
+        turn_time=1.0
     )
 
     time.sleep(1)
     px.stop()
+
 
 
