@@ -302,6 +302,53 @@ class Picarx(object):
             time.sleep(duration)
             self.stop()
             time.sleep(0.5)
+        @log_on_start(logging.DEBUG, "Parallel parking started")
+    @log_on_error(logging.DEBUG, "Error during parallel parking")
+    @log_on_end(logging.DEBUG, "Parallel parking completed")
+
+    def parallel_park(
+        self,
+        speed=35,
+        forward_time=1.0,
+        reverse_time=1.0,
+        settle_time=0.5
+    ):
+        """
+        Perform a simple parallel parking maneuver.
+
+        :param speed: motor speed (0–100)
+        :param forward_time: time to pull forward alongside spot
+        :param reverse_time: time spent reversing in each turn
+        :param settle_time: pause between steps
+        """
+
+        logging.debug("PARALLEL PARK | Step 1: Pull forward, wheels straight")
+        self.set_dir_servo_angle(0)
+        self.forward(speed)
+        time.sleep(forward_time)
+        self.stop()
+        time.sleep(settle_time)
+
+        logging.debug("PARALLEL PARK | Step 2: Reverse with right steering")
+        self.set_dir_servo_angle(-20)   # steer right
+        self.backward(speed)
+        time.sleep(reverse_time)
+        self.stop()
+        time.sleep(settle_time)
+
+        logging.debug("PARALLEL PARK | Step 3: Reverse with left steering")
+        self.set_dir_servo_angle(20)    # steer left
+        self.backward(speed)
+        time.sleep(reverse_time)
+        self.stop()
+        time.sleep(settle_time)
+
+        logging.debug("PARALLEL PARK | Step 4: Straighten wheels and adjust")
+        self.set_dir_servo_angle(0)
+        self.backward(speed * 0.5)
+        time.sleep(0.5)
+        self.stop()
+
 
     #Write function to use cos scaling instead of linear
     def ackerman_scaling(self,steering_angle_deg):
@@ -456,6 +503,12 @@ class Picarx(object):
 
 if __name__ == "__main__":
     px = Picarx()
-    px.forward_backward(speed=40, duration=1.0, cycles=2)
+
+    px.parallel_park(
+        speed=35,
+        duration=1.0
+    )
+
     time.sleep(1)
     px.stop()
+
