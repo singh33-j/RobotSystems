@@ -270,9 +270,6 @@ class Picarx(object):
         logging.debug(f"SET_POWER | speed={speed} (both motors)")
 
 
-    @log_on_start(logging.DEBUG, "Backward fxn started")
-    @log_on_error(logging.DEBUG, "Error encountered in backward fxn")
-    @log_on_end(logging.DEBUG, "Backward fxn ended succesfully: {result!r}")
     @log_on_start(logging.DEBUG, "Forward-backward sequence started")
     @log_on_error(logging.DEBUG, "Error in forward_backward sequence")
     @log_on_end(logging.DEBUG, "Forward-backward sequence completed")
@@ -280,14 +277,7 @@ class Picarx(object):
     def forward_backward(self, speed=40, duration=1.0, cycles=2):
         """
         Move straight forward and backward for a fixed duration.
-        Repeats the motion a given number of cycles.
-
-        :param speed: motor speed (0–100)
-        :param duration: seconds for each forward/backward motion
-        :param cycles: number of forward-backward repetitions
         """
-
-        # Ensure wheels are straight
         self.set_dir_servo_angle(0)
 
         for i in range(cycles):
@@ -302,53 +292,81 @@ class Picarx(object):
             time.sleep(duration)
             self.stop()
             time.sleep(0.5)
+
+    @log_on_start(logging.DEBUG, "3-point turn started")
+    @log_on_error(logging.DEBUG, "Error during 3-point turn")
+    @log_on_end(logging.DEBUG, "3-point turn completed")
+
+    def three_point_turn(self, speed=35, turn_time=1.0, settle_time=0.5):
+        """
+        Perform a 3-point (K) turn.
+        """
+
+        logging.debug("3PT | Step 1: Forward with left steering")
+        self.set_dir_servo_angle(25)
+        self.forward(speed)
+        time.sleep(turn_time)
+        self.stop()
+        time.sleep(settle_time)
+
+        logging.debug("3PT | Step 2: Backward with right steering")
+        self.set_dir_servo_angle(-25)
+        self.backward(speed)
+        time.sleep(turn_time)
+        self.stop()
+        time.sleep(settle_time)
+
+        logging.debug("3PT | Step 3: Forward straight")
+        self.set_dir_servo_angle(0)
+        self.forward(speed)
+        time.sleep(turn_time * 0.75)
+        self.stop()
+
     @log_on_start(logging.DEBUG, "Parallel parking started")
     @log_on_error(logging.DEBUG, "Error during parallel parking")
     @log_on_end(logging.DEBUG, "Parallel parking completed")
-
+    
     def parallel_park(
         self,
         speed=35,
-        forward_time=1.0,
-        reverse_time=1.0,
+        forward_time=2.0,
+        reverse_time=2.0,
         settle_time=0.5
     ):
         """
         Perform a simple parallel parking maneuver.
-
-        :param speed: motor speed (0–100)
-        :param forward_time: time to pull forward alongside spot
-        :param reverse_time: time spent reversing in each turn
-        :param settle_time: pause between steps
         """
 
-        logging.debug("PARALLEL PARK | Step 1: Pull forward, wheels straight")
+        logging.debug("PARALLEL PARK | Step 1: Pull forward")
         self.set_dir_servo_angle(0)
         self.forward(speed)
         time.sleep(forward_time)
         self.stop()
         time.sleep(settle_time)
 
-        logging.debug("PARALLEL PARK | Step 2: Reverse with right steering")
-        self.set_dir_servo_angle(-20)   # steer right
+        logging.debug("PARALLEL PARK | Step 2: Reverse right")
+        self.set_dir_servo_angle(-20)
         self.backward(speed)
         time.sleep(reverse_time)
         self.stop()
         time.sleep(settle_time)
 
-        logging.debug("PARALLEL PARK | Step 3: Reverse with left steering")
-        self.set_dir_servo_angle(20)    # steer left
+        logging.debug("PARALLEL PARK | Step 3: Reverse left")
+        self.set_dir_servo_angle(20)
         self.backward(speed)
         time.sleep(reverse_time)
         self.stop()
         time.sleep(settle_time)
 
-        logging.debug("PARALLEL PARK | Step 4: Straighten wheels and adjust")
+        logging.debug("PARALLEL PARK | Step 4: Final adjust")
         self.set_dir_servo_angle(0)
         self.backward(speed * 0.5)
         time.sleep(0.5)
         self.stop()
 
+                
+        
+    
 
     #Write function to use cos scaling instead of linear
     def ackerman_scaling(self,steering_angle_deg):
