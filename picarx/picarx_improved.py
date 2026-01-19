@@ -297,20 +297,20 @@ class Picarx(object):
     @log_on_error(logging.DEBUG, "Error during 3-point turn")
     @log_on_end(logging.DEBUG, "3-point turn completed")
 
-    def three_point_turn(self, speed=35, turn_time=1.0, settle_time=0.5):
+    def three_point_turn(self, speed=35, turn_time=3.0, settle_time=0.5):
         """
         Perform a 3-point (K) turn.
         """
 
         logging.debug("3PT | Step 1: Forward with left steering")
-        self.set_dir_servo_angle(25)
+        self.set_dir_servo_angle(30)
         self.forward(speed)
         time.sleep(turn_time)
         self.stop()
         time.sleep(settle_time)
 
         logging.debug("3PT | Step 2: Backward with right steering")
-        self.set_dir_servo_angle(-25)
+        self.set_dir_servo_angle(-30)
         self.backward(speed)
         time.sleep(turn_time)
         self.stop()
@@ -523,7 +523,7 @@ if __name__ == "__main__":
 
     px.three_point_turn(
         speed=35,
-        turn_time=1.0
+        turn_time=3.0
     )
 
     time.sleep(1)
