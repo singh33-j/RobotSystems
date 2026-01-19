@@ -40,6 +40,7 @@ def constrain(x, min_val, max_val):
     '''
     return max(min_val, min(max_val, x))
 
+#Create/initialize Picar class
 class Picarx(object):
     CONFIG = '/opt/picar-x/picar-x.conf'
 
@@ -272,6 +273,35 @@ class Picarx(object):
     @log_on_start(logging.DEBUG, "Backward fxn started")
     @log_on_error(logging.DEBUG, "Error encountered in backward fxn")
     @log_on_end(logging.DEBUG, "Backward fxn ended succesfully: {result!r}")
+    @log_on_start(logging.DEBUG, "Forward-backward sequence started")
+    @log_on_error(logging.DEBUG, "Error in forward_backward sequence")
+    @log_on_end(logging.DEBUG, "Forward-backward sequence completed")
+
+    def forward_backward(self, speed=40, duration=1.0, cycles=2):
+        """
+        Move straight forward and backward for a fixed duration.
+        Repeats the motion a given number of cycles.
+
+        :param speed: motor speed (0–100)
+        :param duration: seconds for each forward/backward motion
+        :param cycles: number of forward-backward repetitions
+        """
+
+        # Ensure wheels are straight
+        self.set_dir_servo_angle(0)
+
+        for i in range(cycles):
+            logging.debug(f"CYCLE {i+1}/{cycles} | FORWARD")
+            self.forward(speed)
+            time.sleep(duration)
+            self.stop()
+            time.sleep(0.5)
+
+            logging.debug(f"CYCLE {i+1}/{cycles} | BACKWARD")
+            self.backward(speed)
+            time.sleep(duration)
+            self.stop()
+            time.sleep(0.5)
 
     #Write function to use cos scaling instead of linear
     def ackerman_scaling(self,steering_angle_deg):
@@ -426,6 +456,6 @@ class Picarx(object):
 
 if __name__ == "__main__":
     px = Picarx()
-    px.forward(50)
+    px.forward_backward(speed=40, duration=1.0, cycles=2)
     time.sleep(1)
     px.stop()
