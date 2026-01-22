@@ -529,13 +529,42 @@ class Picarx(object):
 if __name__ == "__main__":
     px = Picarx()
 
-    px.three_point_turn(
-        speed=35,
-        turn_time=3.5
-    )
+    command_map = {
+        "f": px.forward_backward,
+        "t": px.three_point_turn,
+        "p": px.parallel_park,
+    }
 
-    time.sleep(1)
-    px.stop()
+    print("\nPiCar-X Control")
+    print("----------------")
+    print("f : Forward / Backward")
+    print("t : Three-point turn")
+    print("p : Parallel park")
+    print("q : Quit\n")
+
+    try:
+        while True:
+            cmd = input("Enter command (f/t/p/q): ").strip().lower()
+
+            if cmd == "q":
+                print("Exiting...")
+                break
+
+            elif cmd in command_map:
+                logging.info(f"Executing maneuver: {cmd}")
+                command_map[cmd]()   # call the mapped function
+
+            else:
+                print("Invalid command. Use f, t, p, or q.")
+
+    except KeyboardInterrupt:
+        print("\nKeyboard interrupt received.")
+
+    finally:
+        px.stop()
+        px.close()
+        print("Robot safely stopped.")
+
 
 
 
