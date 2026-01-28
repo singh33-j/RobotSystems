@@ -1,11 +1,11 @@
 """
-Line Following for PiCar-X using TARGET sensor profile
+Robust Line Following for PiCar-X (Target-Based, Fast PD)
 
 Goal:
 - Maintain sensor readings near TARGET = [341, 186, 329]
+- Smaller ADC = darker
 - Left darker  -> steer RIGHT
 - Right darker -> steer LEFT
-- Error = 0 ONLY when near target vector
 """
 
 from time import sleep, time
@@ -18,12 +18,12 @@ except ImportError:
 
 
 # ============================================================
-# CONFIG
+# CONFIGURATION
 # ============================================================
-REFERENCE = [1400, 1400, 1400]
-TARGET    = [341.0, 186.0, 329.0]
+REFERENCE = [1400, 1400, 1400]          # fixed per your request
+TARGET    = [341.0, 186.0, 329.0]       # measured centered profile
 
-FILTER_ALPHA = 0.25
+FILTER_ALPHA = 0.5                      # FAST sensor response
 
 
 # ============================================================
@@ -41,72 +41,69 @@ class LineSensor:
         return self.f.copy()
 
     def status(self, v):
+        # Only used for line-lost detection
         return [0 if v[i] <= REFERENCE[i] else 1 for i in range(3)]
 
 
 # ============================================================
-# INTERPRETATION (TARGET TRACKING)
+# INTERPRETATION — TARGET TRACKING
 # ============================================================
 class LineInterpreter:
     def __init__(self, target):
         self.target = target
+        self.scale = abs(target[0] - target[2]) + 1e-6
 
     def compute_error(self, v):
         """
-        Error = (L - L*) - (R - R*)
+        Signed lateral error:
+        (L - L*) - (R - R*)
         Positive -> steer RIGHT
         Negative -> steer LEFT
         """
-
         dL = v[0] - self.target[0]
         dR = v[2] - self.target[2]
 
-        # Signed lateral error
-        e = dL - dR
+        e = (dL - dR) / self.scale
 
-        # Normalize for stability
-        scale = abs(self.target[0] - self.target[2]) + 1e-6
-        return e / scale
+        # Hard clamp to avoid spikes
+        return max(-1.0, min(1.0, e))
 
     def line_lost(self, status):
         return status == [1, 1, 1]
 
 
 # ============================================================
-# CONTROL
+# FAST PD CONTROLLER (NO LAG)
 # ============================================================
 class PDController:
-    def __init__(self, Kp=4.0, Kd=2.0, max_angle=30.0, beta=0.7):
+    def __init__(self, Kp=10.0, Kd=8.0, max_angle=30.0):
         self.Kp = Kp
         self.Kd = Kd
         self.max = max_angle
-        self.beta = beta
 
-        self.ef = 0.0
         self.elast = 0.0
         self.tlast = time()
 
     def step(self, e):
-        t = time()
-        dt = max(t - self.tlast, 1e-4)
+        now = time()
+        dt = max(now - self.tlast, 1e-4)
 
-        self.ef = self.beta * self.ef + (1 - self.beta) * e
+        de = (e - self.elast) / dt
 
-        u = self.Kp * self.ef + self.Kd * (self.ef - self.elast) / dt
+        u = self.Kp * e + self.Kd * de
         u = max(-self.max, min(self.max, u))
 
-        self.elast = self.ef
-        self.tlast = t
+        self.elast = e
+        self.tlast = now
         return u
 
     def reset(self):
-        self.ef = 0.0
         self.elast = 0.0
         self.tlast = time()
 
 
 # ============================================================
-# MAIN
+# MAIN LOOP
 # ============================================================
 if __name__ == "__main__":
 
@@ -116,7 +113,7 @@ if __name__ == "__main__":
     interp = LineInterpreter(TARGET)
     ctrl   = PDController()
 
-    power = 10
+    px_power = 10
 
     try:
         while True:
@@ -125,16 +122,16 @@ if __name__ == "__main__":
 
             if interp.line_lost(s):
                 px.set_dir_servo_angle(0)
-                px.forward(power // 2)
+                px.forward(px_power // 2)
                 ctrl.reset()
-                sleep(0.1)
+                sleep(0.05)
                 continue
 
             err = interp.compute_error(v)
             steer = ctrl.step(err)
 
             px.set_dir_servo_angle(steer)
-            px.forward(power)
+            px.forward(px_power)
 
             print(
                 f"adc={[round(x,1) for x in v]} | "
@@ -145,5 +142,6 @@ if __name__ == "__main__":
             sleep(0.01)
 
     except KeyboardInterrupt:
+        print("\nStopping")
         px.stop()
         sleep(0.1)
