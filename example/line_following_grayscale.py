@@ -1,15 +1,12 @@
 """
-Robust Line Following for PiCar-X (Auto-Calibrated Target, Fast PD)
+Robust Line Following for PiCar-X (Edge-Based Interpretation)
 
-Startup behavior:
-- User places robot centered on dark line
-- Script averages sensor readings for calibration
-- That vector becomes TARGET = [L*, C*, R*]
-
-Control behavior:
-- Maintain sensor readings near TARGET
-- Left darker  -> steer RIGHT
-- Right darker -> steer LEFT
+Interpretation method (per instructions):
+- Detect sharp changes between adjacent sensors (edges)
+- Use edge location + sign to determine left/right
+- Use edge magnitude to determine how far off-center
+- Robust to lighting via normalization
+- Supports dark or light line via polarity
 """
 
 from time import sleep, time
@@ -24,11 +21,11 @@ except ImportError:
 # ============================================================
 # CONFIGURATION
 # ============================================================
-REFERENCE = [1400, 1400, 1400]   # fixed per your requirement
-FILTER_ALPHA = 0.5               # fast sensor response
+REFERENCE = [1400, 1400, 1400]   # used only for line-lost detection
+FILTER_ALPHA = 0.5               # sensor low-pass filter
 
-CALIBRATION_TIME = 1.0           # seconds
-CALIBRATION_RATE = 0.01          # sampling interval
+POLARITY = 'dark'                # 'dark' or 'light'
+EDGE_SENSITIVITY = 0.25           # smaller → more aggressive response
 
 
 # ============================================================
@@ -37,7 +34,7 @@ CALIBRATION_RATE = 0.01          # sampling interval
 class LineSensor:
     def __init__(self, pins=['A0','A1','A2']):
         self.adc = [ADC(p) for p in pins]
-        self.f = [0.0, 0.0, 0.0]
+        self.f   = [0.0, 0.0, 0.0]
 
     def read(self):
         raw = [a.read() for a in self.adc]
@@ -46,34 +43,65 @@ class LineSensor:
         return self.f.copy()
 
     def status(self, v):
+        # 0 = dark (line), 1 = bright (floor)
         return [0 if v[i] <= REFERENCE[i] else 1 for i in range(3)]
 
 
 # ============================================================
-# INTERPRETATION — TARGET TRACKING
+# INTERPRETATION — EDGE DETECTION (INSTRUCTION METHOD)
 # ============================================================
 class LineInterpreter:
-    def __init__(self, target):
-        self.set_target(target)
-
-    def set_target(self, target):
-        self.target = target
-        self.scale = abs(target[0] - target[2]) + 1e-6
+    def __init__(self, polarity='dark', sensitivity=0.3):
+        self.polarity = polarity
+        self.sensitivity = sensitivity
 
     def compute_error(self, v):
         """
-        Signed lateral error:
-        (L - L*) - (R - R*)
-        Positive -> steer RIGHT
-        Negative -> steer LEFT
-        """
-        dL = v[0] - self.target[0]
-        dR = v[2] - self.target[2]
+        Edge-based signed error in [-1, 1]
 
-        e = (dL - dR) / self.scale
-        return max(-1.0, min(1.0, e))
+        Steps:
+        1. Normalize for lighting
+        2. Compute adjacent differences (edges)
+        3. Select strongest edge
+        4. Convert to signed magnitude error
+        """
+
+        L, C, R = v
+
+        # --- Normalize for lighting robustness ---
+        mean = (L + C + R) / 3.0
+        if mean < 1e-6:
+            return 0.0
+
+        L /= mean
+        C /= mean
+        R /= mean
+
+        # --- Adjacent differences (edges) ---
+        dLC = C - L
+        dCR = R - C
+
+        # --- Polarity handling ---
+        # For dark line, we want negative intensity transitions
+        if self.polarity == 'dark':
+            dLC = -dLC
+            dCR = -dCR
+
+        # --- Find strongest edge ---
+        if abs(dLC) > abs(dCR):
+            edge = dLC
+            sign = -1.0    # edge on left → line is left → steer right
+        else:
+            edge = dCR
+            sign = +1.0    # edge on right → line is right → steer left
+
+        # --- Scale magnitude ---
+        mag = min(abs(edge) / self.sensitivity, 1.0)
+
+        return sign * mag
 
     def line_lost(self, status):
+        # All sensors see floor
         return status == [1, 1, 1]
 
 
@@ -81,7 +109,7 @@ class LineInterpreter:
 # FAST PD CONTROLLER
 # ============================================================
 class PDController:
-    def __init__(self, Kp=10.0, Kd=8.0, max_angle=30.0):
+    def __init__(self, Kp=12.0, Kd=6.0, max_angle=30.0):
         self.Kp = Kp
         self.Kd = Kd
         self.max = max_angle
@@ -108,32 +136,6 @@ class PDController:
 
 
 # ============================================================
-# TARGET CALIBRATION
-# ============================================================
-def calibrate_target(sensor):
-    print("\n=== LINE CALIBRATION ===")
-    print("Place robot CENTERED on the line.")
-    print("Do not move it...")
-    sleep(1.0)
-
-    samples = []
-    t0 = time()
-    while time() - t0 < CALIBRATION_TIME:
-        samples.append(sensor.read())
-        sleep(CALIBRATION_RATE)
-
-    # Average samples
-    target = [
-        sum(s[i] for s in samples) / len(samples)
-        for i in range(3)
-    ]
-
-    print(f"Calibrated TARGET = {[round(v,1) for v in target]}")
-    print("========================\n")
-    return target
-
-
-# ============================================================
 # MAIN LOOP
 # ============================================================
 if __name__ == "__main__":
@@ -141,12 +143,12 @@ if __name__ == "__main__":
     px = Picarx()
     sensor = LineSensor()
 
-    # --- Auto-calibrate centered target ---
-    TARGET = calibrate_target(sensor)
+    interp = LineInterpreter(
+        polarity=POLARITY,
+        sensitivity=EDGE_SENSITIVITY
+    )
 
-    interp = LineInterpreter(TARGET)
-    ctrl   = PDController()
-
+    ctrl = PDController()
     px_power = 10
 
     try:
