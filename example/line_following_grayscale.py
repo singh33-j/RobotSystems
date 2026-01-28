@@ -1,15 +1,14 @@
 """
-Line Following program for Picar-X with PD Control (Robust, Fixed Reference)
+Line Following program for Picar-X with PD Control (Robust, Sign-Corrected)
 
 Section 3.1 — Sensing:
     - Direct ADC access (A0 = left, A1 = center, A2 = right)
-    - Raw grayscale readings
+    - Raw grayscale readings with low-pass filtering
     - Fixed reference values [1400, 1400, 1400]
 
 Section 3.2 — Interpretation:
     - Explicit polarity parameter (dark vs light line)
     - Continuous contrast-based geometric error
-    - Lighting-robust centroid computation
 
 Section 3.3 — Control:
     - PD steering controller
@@ -43,7 +42,7 @@ class LineSensor:
         self.alpha = alpha
         self.filtered = [0.0, 0.0, 0.0]
 
-        # EXACT SAME LOGIC AS YOUR ORIGINAL
+        # SAME REFERENCE LOGIC AS ORIGINAL
         if reference_values is None:
             self.reference = [1400, 1400, 1400]
         else:
@@ -52,7 +51,7 @@ class LineSensor:
     def read_grayscale_data(self):
         raw = [adc.read() for adc in self.adc_channels]
 
-        # Low-pass filtering to reduce ADC noise
+        # Low-pass filter ADC values
         for i in range(3):
             self.filtered[i] = (
                 self.alpha * raw[i] +
@@ -203,14 +202,15 @@ if __name__ == "__main__":
                 continue
 
             error = interpreter.calculate_error(gm_vals, sensor.reference)
-            steering_angle = controller.compute(error)
+            steering_cmd = controller.compute(error)
 
-            px.set_dir_servo_angle(steering_angle)
+            # CRITICAL FIX: steering sign
+            px.set_dir_servo_angle(-steering_cmd)
             px.forward(px_power)
 
             print(
                 f"err={error:+.3f} | "
-                f"steer={steering_angle:+.1f}° | "
+                f"steer={-steering_cmd:+.1f}° | "
                 f"status={line_status} | "
                 f"adc={gm_vals}"
             )
