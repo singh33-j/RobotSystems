@@ -1,12 +1,12 @@
 """
-Robust Line Following for PiCar-X (Edge-Based Interpretation)
+Robust Line Following for PiCar-X
+Edge-based interpretation + Adaptive PD control
 
-Interpretation method (per instructions):
-- Detect sharp changes between adjacent sensors (edges)
-- Use edge location + sign to determine left/right
-- Use edge magnitude to determine how far off-center
-- Robust to lighting via normalization
-- Supports dark or light line via polarity
+Instruction-compliant:
+- Detects sharp changes between adjacent sensors (edges)
+- Determines left/right + how far off-center
+- Robust to lighting changes
+- Adaptive gains for smooth + fast steering
 """
 
 from time import sleep, time
@@ -21,11 +21,10 @@ except ImportError:
 # ============================================================
 # CONFIGURATION
 # ============================================================
-REFERENCE = [1400, 1400, 1400]   # used only for line-lost detection
-FILTER_ALPHA = 0.5               # sensor low-pass filter
-
-POLARITY = 'dark'                # 'dark' or 'light'
-EDGE_SENSITIVITY = 0.25           # smaller → more aggressive response
+FILTER_ALPHA = 0.6        # sensor smoothing (higher = faster)
+EDGE_THRESH  = 60.0       # minimum contrast to consider an edge
+MAX_STEER    = 30.0
+PX_POWER     = 10
 
 
 # ============================================================
@@ -34,105 +33,103 @@ EDGE_SENSITIVITY = 0.25           # smaller → more aggressive response
 class LineSensor:
     def __init__(self, pins=['A0','A1','A2']):
         self.adc = [ADC(p) for p in pins]
-        self.f   = [0.0, 0.0, 0.0]
+        self.filt = [0.0, 0.0, 0.0]
 
     def read(self):
         raw = [a.read() for a in self.adc]
         for i in range(3):
-            self.f[i] = FILTER_ALPHA * raw[i] + (1 - FILTER_ALPHA) * self.f[i]
-        return self.f.copy()
-
-    def status(self, v):
-        # 0 = dark (line), 1 = bright (floor)
-        return [0 if v[i] <= REFERENCE[i] else 1 for i in range(3)]
+            self.filt[i] = (
+                FILTER_ALPHA * raw[i] +
+                (1 - FILTER_ALPHA) * self.filt[i]
+            )
+        return self.filt.copy()
 
 
 # ============================================================
-# INTERPRETATION — EDGE DETECTION (INSTRUCTION METHOD)
+# INTERPRETATION — EDGE DETECTION (INSTRUCTION STYLE)
 # ============================================================
 class LineInterpreter:
-    def __init__(self, polarity='dark', sensitivity=0.3):
+    def __init__(self, polarity='dark'):
         self.polarity = polarity
-        self.sensitivity = sensitivity
 
     def compute_error(self, v):
         """
-        Edge-based signed error in [-1, 1]
-
-        Steps:
-        1. Normalize for lighting
-        2. Compute adjacent differences (edges)
-        3. Select strongest edge
-        4. Convert to signed magnitude error
+        Returns signed error in [-1, 1]
+        Positive  -> line on LEFT -> steer RIGHT
+        Negative  -> line on RIGHT -> steer LEFT
         """
 
         L, C, R = v
 
-        # --- Normalize for lighting robustness ---
-        mean = (L + C + R) / 3.0
-        if mean < 1e-6:
-            return 0.0
-
-        L /= mean
-        C /= mean
-        R /= mean
-
-        # --- Adjacent differences (edges) ---
+        # Edge magnitudes
         dLC = C - L
         dCR = R - C
 
-        # --- Polarity handling ---
-        # For dark line, we want negative intensity transitions
-        if self.polarity == 'dark':
+        if self.polarity == 'light':
             dLC = -dLC
             dCR = -dCR
 
-        # --- Find strongest edge ---
+        # No edge detected
+        if abs(dLC) < EDGE_THRESH and abs(dCR) < EDGE_THRESH:
+            return 0.0
+
+        # Left edge stronger
         if abs(dLC) > abs(dCR):
-            edge = dLC
-            sign = -1.0    # edge on left → line is left → steer right
+            mag = min(abs(dLC) / (EDGE_THRESH * 4), 1.0)
+            return +mag
+
+        # Right edge stronger
         else:
-            edge = dCR
-            sign = +1.0    # edge on right → line is right → steer left
+            mag = min(abs(dCR) / (EDGE_THRESH * 4), 1.0)
+            return -mag
 
-        # --- Scale magnitude ---
-        mag = min(abs(edge) / self.sensitivity, 1.0)
-
-        return sign * mag
-
-    def line_lost(self, status):
-        # All sensors see floor
-        return status == [1, 1, 1]
+    def line_lost(self, v):
+        spread = max(v) - min(v)
+        return spread < EDGE_THRESH
 
 
 # ============================================================
-# FAST PD CONTROLLER
+# ADAPTIVE PD CONTROLLER
 # ============================================================
-class PDController:
-    def __init__(self, Kp=12.0, Kd=6.0, max_angle=30.0):
-        self.Kp = Kp
-        self.Kd = Kd
+class AdaptivePDController:
+    def __init__(
+        self,
+        Kp_min=4.0,
+        Kp_max=22.0,
+        Kd_min=1.0,
+        Kd_max=12.0,
+        max_angle=30.0
+    ):
+        self.Kp_min = Kp_min
+        self.Kp_max = Kp_max
+        self.Kd_min = Kd_min
+        self.Kd_max = Kd_max
         self.max = max_angle
 
-        self.elast = 0.0
-        self.tlast = time()
+        self.e_last = 0.0
+        self.t_last = time()
 
     def step(self, e):
         now = time()
-        dt = max(now - self.tlast, 1e-4)
+        dt = max(now - self.t_last, 1e-4)
 
-        de = (e - self.elast) / dt
+        de = (e - self.e_last) / dt
+        mag = abs(e)
 
-        u = self.Kp * e + self.Kd * de
+        # Adaptive gains
+        Kp = self.Kp_min + (self.Kp_max - self.Kp_min) * mag
+        Kd = self.Kd_max - (self.Kd_max - self.Kd_min) * mag
+
+        u = Kp * e + Kd * de
         u = max(-self.max, min(self.max, u))
 
-        self.elast = e
-        self.tlast = now
+        self.e_last = e
+        self.t_last = now
         return u
 
     def reset(self):
-        self.elast = 0.0
-        self.tlast = time()
+        self.e_last = 0.0
+        self.t_last = time()
 
 
 # ============================================================
@@ -142,23 +139,16 @@ if __name__ == "__main__":
 
     px = Picarx()
     sensor = LineSensor()
-
-    interp = LineInterpreter(
-        polarity=POLARITY,
-        sensitivity=EDGE_SENSITIVITY
-    )
-
-    ctrl = PDController()
-    px_power = 10
+    interp = LineInterpreter(polarity='dark')
+    ctrl   = AdaptivePDController(max_angle=MAX_STEER)
 
     try:
         while True:
             v = sensor.read()
-            s = sensor.status(v)
 
-            if interp.line_lost(s):
+            if interp.line_lost(v):
                 px.set_dir_servo_angle(0)
-                px.forward(px_power // 2)
+                px.forward(PX_POWER // 2)
                 ctrl.reset()
                 sleep(0.05)
                 continue
@@ -167,7 +157,7 @@ if __name__ == "__main__":
             steer = ctrl.step(err)
 
             px.set_dir_servo_angle(steer)
-            px.forward(px_power)
+            px.forward(PX_POWER)
 
             print(
                 f"adc={[round(x,1) for x in v]} | "
@@ -178,6 +168,6 @@ if __name__ == "__main__":
             sleep(0.01)
 
     except KeyboardInterrupt:
-        print("\nStopping")
+        print("\nStopping...")
         px.stop()
         sleep(0.1)
