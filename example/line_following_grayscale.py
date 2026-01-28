@@ -1,9 +1,13 @@
 """
-Robust Line Following for PiCar-X (Target-Based, Fast PD)
+Robust Line Following for PiCar-X (Auto-Calibrated Target, Fast PD)
 
-Goal:
-- Maintain sensor readings near TARGET = [341, 186, 329]
-- Smaller ADC = darker
+Startup behavior:
+- User places robot centered on dark line
+- Script averages sensor readings for calibration
+- That vector becomes TARGET = [L*, C*, R*]
+
+Control behavior:
+- Maintain sensor readings near TARGET
 - Left darker  -> steer RIGHT
 - Right darker -> steer LEFT
 """
@@ -20,10 +24,11 @@ except ImportError:
 # ============================================================
 # CONFIGURATION
 # ============================================================
-REFERENCE = [1400, 1400, 1400]          # fixed per your request
-TARGET    = [341.0, 186.0, 329.0]       # measured centered profile
+REFERENCE = [1400, 1400, 1400]   # fixed per your requirement
+FILTER_ALPHA = 0.5               # fast sensor response
 
-FILTER_ALPHA = 0.5                      # FAST sensor response
+CALIBRATION_TIME = 1.0           # seconds
+CALIBRATION_RATE = 0.01          # sampling interval
 
 
 # ============================================================
@@ -41,7 +46,6 @@ class LineSensor:
         return self.f.copy()
 
     def status(self, v):
-        # Only used for line-lost detection
         return [0 if v[i] <= REFERENCE[i] else 1 for i in range(3)]
 
 
@@ -50,6 +54,9 @@ class LineSensor:
 # ============================================================
 class LineInterpreter:
     def __init__(self, target):
+        self.set_target(target)
+
+    def set_target(self, target):
         self.target = target
         self.scale = abs(target[0] - target[2]) + 1e-6
 
@@ -64,8 +71,6 @@ class LineInterpreter:
         dR = v[2] - self.target[2]
 
         e = (dL - dR) / self.scale
-
-        # Hard clamp to avoid spikes
         return max(-1.0, min(1.0, e))
 
     def line_lost(self, status):
@@ -73,7 +78,7 @@ class LineInterpreter:
 
 
 # ============================================================
-# FAST PD CONTROLLER (NO LAG)
+# FAST PD CONTROLLER
 # ============================================================
 class PDController:
     def __init__(self, Kp=10.0, Kd=8.0, max_angle=30.0):
@@ -103,13 +108,42 @@ class PDController:
 
 
 # ============================================================
+# TARGET CALIBRATION
+# ============================================================
+def calibrate_target(sensor):
+    print("\n=== LINE CALIBRATION ===")
+    print("Place robot CENTERED on the line.")
+    print("Do not move it...")
+    sleep(1.0)
+
+    samples = []
+    t0 = time()
+    while time() - t0 < CALIBRATION_TIME:
+        samples.append(sensor.read())
+        sleep(CALIBRATION_RATE)
+
+    # Average samples
+    target = [
+        sum(s[i] for s in samples) / len(samples)
+        for i in range(3)
+    ]
+
+    print(f"Calibrated TARGET = {[round(v,1) for v in target]}")
+    print("========================\n")
+    return target
+
+
+# ============================================================
 # MAIN LOOP
 # ============================================================
 if __name__ == "__main__":
 
     px = Picarx()
-
     sensor = LineSensor()
+
+    # --- Auto-calibrate centered target ---
+    TARGET = calibrate_target(sensor)
+
     interp = LineInterpreter(TARGET)
     ctrl   = PDController()
 
