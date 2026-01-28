@@ -21,7 +21,7 @@ except ImportError:
 REFERENCE = [1400, 1400, 1400]   # required by assignment
 FILTER_ALPHA = 0.5              # sensor LPF
 
-EDGE_MAG_THRESH   = 0.25        # minimum edge strength
+EDGE_MAG_THRESH   = 0.15        # minimum edge strength
 EDGE_ASYM_THRESH  = 0.10        # must be directional
 
 CONTROL_DT = 0.01
