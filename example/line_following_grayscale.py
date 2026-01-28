@@ -1,12 +1,8 @@
 """
 Robust Line Following for PiCar-X
-Edge-based interpretation + Adaptive PD control
-
-Instruction-compliant:
-- Detects sharp changes between adjacent sensors (edges)
-- Determines left/right + how far off-center
-- Robust to lighting changes
-- Adaptive gains for smooth + fast steering
+Edge-based interpretation (instruction-compliant)
+Low-contrast and lighting-robust
+Fixed PD controller
 """
 
 from time import sleep, time
@@ -21,89 +17,102 @@ except ImportError:
 # ============================================================
 # CONFIGURATION
 # ============================================================
-FILTER_ALPHA = 0.6        # sensor smoothing (higher = faster)
-EDGE_THRESH  = 60.0       # minimum contrast to consider an edge
-MAX_STEER    = 30.0
-PX_POWER     = 10
+FILTER_ALPHA = 0.6        # sensor smoothing (0.4–0.7)
+EDGE_MIN     = 0.15       # minimum normalized edge strength
+
+PX_POWER  = 10
+MAX_STEER = 30.0
+
+# Fixed PD gains (tune these)
+KP = 12.0
+KD = 6.0
 
 
 # ============================================================
 # SENSING
 # ============================================================
 class LineSensor:
-    def __init__(self, pins=['A0','A1','A2']):
+    def __init__(self, pins=['A0', 'A1', 'A2']):
         self.adc = [ADC(p) for p in pins]
         self.filt = [0.0, 0.0, 0.0]
 
     def read(self):
         raw = [a.read() for a in self.adc]
+
         for i in range(3):
             self.filt[i] = (
                 FILTER_ALPHA * raw[i] +
                 (1 - FILTER_ALPHA) * self.filt[i]
             )
+
         return self.filt.copy()
 
 
 # ============================================================
-# INTERPRETATION — EDGE DETECTION (INSTRUCTION STYLE)
+# INTERPRETATION — LOW-CONTRAST EDGE DETECTION
 # ============================================================
 class LineInterpreter:
     def __init__(self, polarity='dark'):
+        """
+        polarity:
+        'dark'  -> line darker than floor
+        'light' -> line lighter than floor
+        """
         self.polarity = polarity
 
     def compute_error(self, v):
         """
-        Returns signed error in [-1, 1]
-        Positive  -> line on LEFT -> steer RIGHT
-        Negative  -> line on RIGHT -> steer LEFT
-        """
+        Returns normalized error in [-1, 1]
 
+        +error → line on LEFT  → steer RIGHT
+        -error → line on RIGHT → steer LEFT
+        """
         L, C, R = v
 
-        # Edge magnitudes
-        dLC = C - L
-        dCR = R - C
+        # --- Normalize brightness (removes lighting bias) ---
+        mu = (L + C + R) / 3.0
+        Lr, Cr, Rr = L - mu, C - mu, R - mu
 
+        # Adjacent differences (edge detection)
+        dLC = Cr - Lr
+        dCR = Rr - Cr
+
+        # Polarity handling
         if self.polarity == 'light':
             dLC = -dLC
             dCR = -dCR
 
-        # No edge detected
-        if abs(dLC) < EDGE_THRESH and abs(dCR) < EDGE_THRESH:
+        # Normalize by local contrast
+        spread = max(abs(Lr), abs(Cr), abs(Rr)) + 1e-6
+        dLC /= spread
+        dCR /= spread
+
+        # Weak edge → treat as centered
+        edge_strength = max(abs(dLC), abs(dCR))
+        if edge_strength < EDGE_MIN:
             return 0.0
 
-        # Left edge stronger
+        # Decide direction and magnitude
         if abs(dLC) > abs(dCR):
-            mag = min(abs(dLC) / (EDGE_THRESH * 4), 1.0)
-            return +mag
-
-        # Right edge stronger
+            return +min(abs(dLC), 1.0)
         else:
-            mag = min(abs(dCR) / (EDGE_THRESH * 4), 1.0)
-            return -mag
+            return -min(abs(dCR), 1.0)
 
     def line_lost(self, v):
-        spread = max(v) - min(v)
-        return spread < EDGE_THRESH
+        """
+        Line lost when relative contrast disappears
+        """
+        mu = sum(v) / 3.0
+        return max(abs(x - mu) for x in v) < 30
 
 
 # ============================================================
-# ADAPTIVE PD CONTROLLER
+# FIXED PD CONTROLLER
 # ============================================================
-class AdaptivePDController:
-    def __init__(
-        self,
-        Kp_min=4.0,
-        Kp_max=22.0,
-        Kd_min=1.0,
-        Kd_max=12.0,
-        max_angle=30.0
-    ):
-        self.Kp_min = Kp_min
-        self.Kp_max = Kp_max
-        self.Kd_min = Kd_min
-        self.Kd_max = Kd_max
+class PDController:
+    def __init__(self, Kp, Kd, max_angle):
+        self.Kp = Kp
+        self.Kd = Kd
         self.max = max_angle
 
         self.e_last = 0.0
@@ -114,13 +123,8 @@ class AdaptivePDController:
         dt = max(now - self.t_last, 1e-4)
 
         de = (e - self.e_last) / dt
-        mag = abs(e)
+        u = self.Kp * e + self.Kd * de
 
-        # Adaptive gains
-        Kp = self.Kp_min + (self.Kp_max - self.Kp_min) * mag
-        Kd = self.Kd_max - (self.Kd_max - self.Kd_min) * mag
-
-        u = Kp * e + Kd * de
         u = max(-self.max, min(self.max, u))
 
         self.e_last = e
@@ -140,13 +144,14 @@ if __name__ == "__main__":
     px = Picarx()
     sensor = LineSensor()
     interp = LineInterpreter(polarity='dark')
-    ctrl   = AdaptivePDController(max_angle=MAX_STEER)
+    ctrl   = PDController(KP, KD, MAX_STEER)
 
     try:
         while True:
             v = sensor.read()
 
             if interp.line_lost(v):
+                # Slow straight search
                 px.set_dir_servo_angle(0)
                 px.forward(PX_POWER // 2)
                 ctrl.reset()
