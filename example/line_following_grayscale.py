@@ -1,8 +1,9 @@
 """
-Robust Line Following for PiCar-X
-Edge-based interpretation (instruction-compliant)
-Low-contrast and lighting-robust
-Fixed PD controller
+Robust Edge-Based Line Following for PiCar-X
+- Relative edge detection (lighting invariant)
+- Edge confidence + asymmetry gating
+- Soft steering (no bang-bang)
+- Natural recovery when line is weak or lost
 """
 
 from time import sleep, time
@@ -17,67 +18,52 @@ except ImportError:
 # ============================================================
 # CONFIGURATION
 # ============================================================
-FILTER_ALPHA = 0.6        # sensor smoothing (0.4–0.7)
-EDGE_MIN     = 0.15       # minimum normalized edge strength
+REFERENCE = [1400, 1400, 1400]   # required by assignment
+FILTER_ALPHA = 0.5              # sensor LPF
 
-PX_POWER  = 10
-MAX_STEER = 30.0
+EDGE_MAG_THRESH   = 0.25        # minimum edge strength
+EDGE_ASYM_THRESH  = 0.10        # must be directional
 
-# Fixed PD gains (tune these)
-KP = 16.0
-KD = 2.0
+CONTROL_DT = 0.01
 
 
 # ============================================================
 # SENSING
 # ============================================================
 class LineSensor:
-    def __init__(self, pins=['A0', 'A1', 'A2']):
+    def __init__(self, pins=['A0','A1','A2']):
         self.adc = [ADC(p) for p in pins]
         self.filt = [0.0, 0.0, 0.0]
 
     def read(self):
         raw = [a.read() for a in self.adc]
-
         for i in range(3):
-            self.filt[i] = (
-                FILTER_ALPHA * raw[i] +
-                (1 - FILTER_ALPHA) * self.filt[i]
-            )
-
+            self.filt[i] = FILTER_ALPHA * raw[i] + (1 - FILTER_ALPHA) * self.filt[i]
         return self.filt.copy()
+
+    def status(self, v):
+        # binary comparator (used only for lost-line detection)
+        return [0 if v[i] <= REFERENCE[i] else 1 for i in range(3)]
 
 
 # ============================================================
-# INTERPRETATION — LOW-CONTRAST EDGE DETECTION
+# INTERPRETATION — EDGE DETECTION (INSTRUCTION-COMPLIANT)
 # ============================================================
 class LineInterpreter:
     def __init__(self, polarity='dark'):
-        """
-        polarity:
-        'dark'  -> line darker than floor
-        'light' -> line lighter than floor
-        """
         self.polarity = polarity
 
     def compute_error(self, v):
-        """
-        Returns normalized error in [-1, 1]
-
-        +error → line on LEFT  → steer RIGHT
-        -error → line on RIGHT → steer LEFT
-        """
         L, C, R = v
 
-        # --- Normalize brightness (removes lighting bias) ---
+        # --- Remove global brightness ---
         mu = (L + C + R) / 3.0
         Lr, Cr, Rr = L - mu, C - mu, R - mu
 
-        # Adjacent differences (edge detection)
+        # Adjacent differences = edges
         dLC = Cr - Lr
         dCR = Rr - Cr
 
-        # Polarity handling
         if self.polarity == 'light':
             dLC = -dLC
             dCR = -dCR
@@ -87,48 +73,51 @@ class LineInterpreter:
         dLC /= spread
         dCR /= spread
 
-        # Weak edge → treat as centered
-        edge_strength = max(abs(dLC), abs(dCR))
-        if edge_strength < EDGE_MIN:
+        edge_mag  = max(abs(dLC), abs(dCR))
+        edge_asym = abs(abs(dLC) - abs(dCR))
+
+        # --- No reliable edge → go straight ---
+        if edge_mag < EDGE_MAG_THRESH or edge_asym < EDGE_ASYM_THRESH:
             return 0.0
 
-        # Decide direction and magnitude
+        # --- Choose dominant edge (soft, signed) ---
         if abs(dLC) > abs(dCR):
-            return +min(abs(dLC), 1.0)
+            e = +dLC     # left edge → line on left → steer right
         else:
-            return -min(abs(dCR), 1.0)
+            e = -dCR     # right edge → line on right → steer left
+
+        # Soft clamp (prevents ±1 snapping)
+        e = max(-1.0, min(1.0, 0.7 * e))
+        return e
 
     def line_lost(self, v):
-        """
-        Line lost when relative contrast disappears
-        """
+        # If contrast collapses entirely
         mu = sum(v) / 3.0
-        return max(abs(x - mu) for x in v) < 30
+        return max(abs(x - mu) for x in v) < 25
 
 
 # ============================================================
-# FIXED PD CONTROLLER
+# PD CONTROLLER (FIXED GAINS)
 # ============================================================
 class PDController:
-    def __init__(self, Kp, Kd, max_angle):
+    def __init__(self, Kp=10.0, Kd=6.0, max_angle=30.0):
         self.Kp = Kp
         self.Kd = Kd
         self.max = max_angle
-
         self.e_last = 0.0
         self.t_last = time()
 
     def step(self, e):
-        now = time()
-        dt = max(now - self.t_last, 1e-4)
+        t = time()
+        dt = max(t - self.t_last, 1e-4)
 
         de = (e - self.e_last) / dt
-        u = self.Kp * e + self.Kd * de
+        u  = self.Kp * e + self.Kd * de
 
         u = max(-self.max, min(self.max, u))
 
         self.e_last = e
-        self.t_last = now
+        self.t_last = t
         return u
 
     def reset(self):
@@ -144,25 +133,28 @@ if __name__ == "__main__":
     px = Picarx()
     sensor = LineSensor()
     interp = LineInterpreter(polarity='dark')
-    ctrl   = PDController(KP, KD, MAX_STEER)
+    ctrl   = PDController()
+
+    px_power = 10
 
     try:
         while True:
             v = sensor.read()
+            s = sensor.status(v)
 
+            # Line lost → straighten + slow forward
             if interp.line_lost(v):
-                # Slow straight search
                 px.set_dir_servo_angle(0)
-                px.forward(PX_POWER // 2)
+                px.forward(px_power // 2)
                 ctrl.reset()
                 sleep(0.05)
                 continue
 
-            err = interp.compute_error(v)
+            err    = interp.compute_error(v)
             steer = ctrl.step(err)
 
             px.set_dir_servo_angle(steer)
-            px.forward(PX_POWER)
+            px.forward(px_power)
 
             print(
                 f"adc={[round(x,1) for x in v]} | "
@@ -170,7 +162,7 @@ if __name__ == "__main__":
                 f"steer={steer:+.1f}"
             )
 
-            sleep(0.01)
+            sleep(CONTROL_DT)
 
     except KeyboardInterrupt:
         print("\nStopping...")
