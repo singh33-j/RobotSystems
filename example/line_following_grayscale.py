@@ -11,11 +11,12 @@ except ImportError:
 # CONFIGURATION
 # ============================================================
 
-FILTER_ALPHA = 0.7          # sensor low-pass filter
-EDGE_THRESH  = 0.05         # minimum usable edge strength
+FILTER_ALPHA = 0.7
+EDGE_THRESH  = 0.05
 CONTROL_DT  = 0.01
 
-FORWARD_SPEED = 4           # slower speed for curves
+FORWARD_SPEED = 4          # slow for curves
+REVERSE_SPEED = 3          # slightly slower reverse
 
 
 # ============================================================
@@ -23,7 +24,7 @@ FORWARD_SPEED = 4           # slower speed for curves
 # ============================================================
 
 class LineSensor:
-    def __init__(self, pins=['A0', 'A1', 'A2']):
+    def __init__(self, pins=['A0','A1','A2']):
         self.adc = [ADC(p) for p in pins]
         self.filt = [0.0, 0.0, 0.0]
 
@@ -38,7 +39,7 @@ class LineSensor:
 
 
 # ============================================================
-# INTERPRETATION — PURE EDGE METHOD (NO MEAN REMOVAL)
+# INTERPRETATION — EDGE BASED
 # ============================================================
 
 class LineInterpreter:
@@ -48,36 +49,28 @@ class LineInterpreter:
     def compute_error(self, v):
         L, C, R = v
 
-        # Adjacent differences (edges)
-        dLC = C - L          # left–center edge
-        dCR = R - C          # center–right edge
+        dLC = C - L
+        dCR = R - C
 
         if self.polarity == 'light':
             dLC = -dLC
             dCR = -dCR
 
-        # Normalize by local contrast
         contrast = abs(L - C) + abs(C - R) + 1e-6
         dLC /= contrast
         dCR /= contrast
 
-        edge_strength = max(abs(dLC), abs(dCR))
+        if max(abs(dLC), abs(dCR)) < EDGE_THRESH:
+            return None   # <<< explicitly say "no line"
 
-        # If no detectable edge → go straight
-        if edge_strength < EDGE_THRESH:
-            return 0.0
-
-        # Choose stronger edge
         if abs(dLC) > abs(dCR):
-            e = +dLC       # left darker → steer right
+            e = +dLC
         else:
-            e = -dCR       # right darker → steer left
+            e = -dCR
 
-        # Soft clamp
         return max(-1.0, min(1.0, 0.7 * e))
 
     def line_lost(self, v):
-        # If all sensors are nearly equal → no contrast
         return max(v) - min(v) < 20
 
 
@@ -122,23 +115,41 @@ if __name__ == "__main__":
     interp = LineInterpreter(polarity='dark')
     ctrl   = PDController()
 
+    last_valid_time  = time()
+    last_valid_steer = 0.0
+
     try:
         while True:
             v = sensor.read()
+            err = interp.compute_error(v)
 
-            # Lost line → slow, straight recovery
-            if interp.line_lost(v):
-                px.set_dir_servo_angle(0)
-                px.forward(FORWARD_SPEED // 2)
+            # ---------- LINE LOST ----------
+            if err is None or interp.line_lost(v):
+
+                # compute distance-equivalent reverse time
+                t_lost = time() - last_valid_time
+                reverse_time = min(t_lost, 1.0)  # safety cap
+
+                px.stop()
+                px.set_dir_servo_angle(last_valid_steer)
+
+                px.backward(REVERSE_SPEED)
+                sleep(reverse_time)
+
+                px.stop()
                 ctrl.reset()
                 sleep(0.05)
                 continue
 
-            err = interp.compute_error(v)
+            # ---------- NORMAL OPERATION ----------
             steer = ctrl.step(err)
 
             px.set_dir_servo_angle(steer)
             px.forward(FORWARD_SPEED)
+
+            # remember last valid state
+            last_valid_time  = time()
+            last_valid_steer = steer
 
             print(
                 f"adc={[round(x,1) for x in v]} | "
