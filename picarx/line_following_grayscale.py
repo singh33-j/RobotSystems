@@ -63,33 +63,19 @@ class LineSensor:
 class LineInterpreter:
     def __init__(self, polarity='dark'):
         self.polarity = polarity
+def compute_error(self, v):
+    L, C, R = v
 
-    def compute_error(self, v):
-        L, C, R = v
+    # Dark line → lower ADC value
+    # Positive error = line on right → steer right
+    e = (R - L)
 
-        dLC = C - L
-        dCR = R - C
+    if self.polarity == 'light':
+        e = -e
+    return max(-1.0, min(1.0, e))
 
-        if self.polarity == 'light':
-            dLC = -dLC
-            dCR = -dCR
-
-        contrast = abs(L - C) + abs(C - R) + 1e-6
-        dLC /= contrast
-        dCR /= contrast
-
-        if max(abs(dLC), abs(dCR)) < EDGE_THRESH:
-            return 0.0
-
-        if abs(dLC) > abs(dCR):
-            e = +dLC
-        else:
-            e = -dCR
-
-        return max(-1.0, min(1.0, 0.7 * e))
-
-    def line_lost(self, drop_sum):
-        return drop_sum > DROP_SUM_THRESH
+def line_lost(self, drop_sum):
+    return drop_sum > DROP_SUM_THRESH
 
 
 # ============================================================
