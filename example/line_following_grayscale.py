@@ -17,7 +17,7 @@ CONTROL_DT   = 0.01
 EDGE_THRESH       = 0.05    # minimum normalized edge strength
 EDGE_ASYM_THRESH  = 0.15    # must be asymmetric to count as line
 
-LINE_LOST_DELAY = 0.5       # seconds before declaring loss
+LINE_LOST_DELAY = 1.0      # seconds before declaring loss
 
 FORWARD_SPEED = 4
 REVERSE_SPEED = 3
