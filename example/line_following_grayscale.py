@@ -19,9 +19,10 @@ FORWARD_SPEED = 4
 REVERSE_SPEED = 3
 
 STARTUP_STRAIGHT_TIME = 0.2
-STOP_BEFORE_REVERSE  = 1.0
+LINE_LOSS_ENABLE_TIME = 1.0   # <<< NEW
+STOP_BEFORE_REVERSE   = 1.0
 
-DROP_SUM_THRESH = 600   # <<< YOUR LINE-LOSS CONDITION
+DROP_SUM_THRESH = 600
 
 
 # ============================================================
@@ -44,7 +45,6 @@ class LineSensor:
 
         v = self.filt.copy()
 
-        # initialize previous on first call
         if self.prev is None:
             self.prev = v.copy()
 
@@ -140,25 +140,32 @@ if __name__ == "__main__":
     try:
         while True:
 
-            # ---------------- STARTUP ----------------
-            if time() - start_time < STARTUP_STRAIGHT_TIME:
+            t_now = time()
+            elapsed = t_now - start_time
+
+            # ---------------- STARTUP STRAIGHT ----------------
+            if elapsed < STARTUP_STRAIGHT_TIME:
                 px.set_dir_servo_angle(0)
                 px.forward(FORWARD_SPEED)
                 ctrl.reset()
+
                 print("STARTUP | line_lost=False | steer=0")
                 sleep(CONTROL_DT)
                 continue
-            # -----------------------------------------
+            # --------------------------------------------------
 
             v = sensor.read()
             drops = sensor.brightness_drop(v)
             drop_sum = sum(drops)
 
-            lost = interp.line_lost(drop_sum)
+            # Enable loss logic only after 1s
+            loss_enabled = elapsed >= LINE_LOSS_ENABLE_TIME
+            lost = loss_enabled and interp.line_lost(drop_sum)
 
             # ---------------- LINE LOST ----------------
             if lost:
                 px.stop()
+
                 print(
                     f"REVERSE | adc={[round(x) for x in v]} | "
                     f"drops={[round(d) for d in drops]} | "
@@ -176,9 +183,9 @@ if __name__ == "__main__":
                 ctrl.reset()
                 sleep(0.1)
                 continue
-            # ------------------------------------------
+            # -------------------------------------------
 
-            # ---------------- TRACKING ----------------
+            # ---------------- TRACKING -----------------
             err   = interp.compute_error(v)
             steer = ctrl.step(err)
 
