@@ -20,6 +20,12 @@ STOP_BEFORE_REVERSE   = 1.0
 
 DROP_SUM_THRESH = 600
 
+# --- Steering shaping ---
+ERROR_GAIN        = 8.0      # amplify small sensor differences
+ERROR_DEADZONE    = 0.05     # ignore tiny noise
+STEER_DEADZONE_DEG = 1.5     # servo cannot respond below this
+MAX_STEER_DEG     = 25.0
+
 
 # ============================================================
 # SENSING
@@ -33,19 +39,14 @@ class LineSensor:
 
     def read(self):
         raw = [a.read() for a in self.adc]
-
         for i in range(3):
             self.filt[i] = (
                 FILTER_ALPHA * raw[i]
                 + (1 - FILTER_ALPHA) * self.filt[i]
             )
-
-        v = self.filt.copy()
-
         if self.prev is None:
-            self.prev = v.copy()
-
-        return v
+            self.prev = self.filt.copy()
+        return self.filt.copy()
 
     def brightness_drop(self, v):
         drops = [
@@ -57,7 +58,7 @@ class LineSensor:
 
 
 # ============================================================
-# INTERPRETATION (FIXED)
+# INTERPRETATION (FIXED + AMPLIFIED)
 # ============================================================
 
 class LineInterpreter:
@@ -66,23 +67,25 @@ class LineInterpreter:
 
     def compute_error(self, v):
         """
-        Robust, normalized center-of-mass style error.
-        Zero when centered, smooth, non-saturating.
+        Center-dominant, amplified error.
+        Robust near center and physically meaningful.
         """
         L, C, R = v
-        s = L + C + R
 
-        if s < 1e-6:
-            return 0.0
-
-        # RIGHT positive, LEFT negative
-        e = (R - L) / s
+        denom = abs(L - C) + abs(R - C) + 1e-6
+        e = (R - L) / denom
 
         if self.polarity == 'light':
             e = -e
 
-        # hard safety clamp (prevents lock-up)
-        return max(-0.6, min(0.6, e))
+        # amplify small errors
+        e *= ERROR_GAIN
+
+        # noise deadzone
+        if abs(e) < ERROR_DEADZONE:
+            e = 0.0
+
+        return max(-1.0, min(1.0, e))
 
     def line_lost(self, drop_sum):
         return drop_sum > DROP_SUM_THRESH
@@ -93,7 +96,7 @@ class LineInterpreter:
 # ============================================================
 
 class PDController:
-    def __init__(self, Kp=15.0, Kd=2.0, max_angle=30.0):
+    def __init__(self, Kp=18.0, Kd=4.0, max_angle=MAX_STEER_DEG):
         self.Kp = Kp
         self.Kd = Kd
         self.max = max_angle
@@ -173,6 +176,10 @@ if __name__ == "__main__":
             # ---------------- TRACKING -----------------
             err   = interp.compute_error(v)
             steer = ctrl.step(err)
+
+            # enforce physical steering limits
+            if abs(steer) < STEER_DEADZONE_DEG:
+                steer = 0.0
 
             px.set_dir_servo_angle(steer)
             px.forward(20)
