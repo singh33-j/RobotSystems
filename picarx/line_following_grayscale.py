@@ -86,7 +86,7 @@ class LineInterpreter:
         if abs(e) < ERROR_DEADZONE:
             e = 0.0
 
-        return max(-1.0, min(1.0, e))
+        return e
 
     def line_lost(self, drop_sum):
         return drop_sum > DROP_SUM_THRESH
