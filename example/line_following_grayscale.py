@@ -1,189 +1,152 @@
-from time import sleep, time
 from picarx import Picarx
+import time
+
+# -----------------------------
+# Robot setup
+# -----------------------------
+px = Picarx()
+
+# -----------------------------
+# Tunable parameters
+# -----------------------------
+BASE_SPEED        = 12          # forward speed
+REVERSE_SPEED     = -10         # reverse speed
+KP_STEER          = 35          # proportional steering gain (deg per error)
+MAX_STEER         = 30          # steering limit (deg)
+
+LINE_LOST_TIME    = 0.5         # seconds line must be gone before recovery
+BRIGHTNESS_JUMP   = 700         # brightness range threshold for "off line"
+ASYM_THRESHOLD    = 60          # min L/R diff to consider valid asymmetry
+
+CONTROL_DT        = 0.05        # loop period (s)
+
+# -----------------------------
+# State variables
+# -----------------------------
+STATE_TRACKING   = "TRACKING"
+STATE_LOST_WAIT  = "LOST_WAIT"
+STATE_RECOVERING = "RECOVERING"
+
+state = STATE_TRACKING
+
+lost_start_time   = None
+recover_start_time = None
+
+last_valid_steer  = 0.0
+last_seen_time    = time.time()
+
+# -----------------------------
+# Helper functions
+# -----------------------------
+def read_grayscale():
+    return px.get_grayscale_data()
+
+def clamp(val, lo, hi):
+    return max(lo, min(hi, val))
+
+def brightness_range(v):
+    return max(v) - min(v)
+
+def compute_error(v):
+    """
+    Normalized weighted error:
+      left  -> -1
+      mid   ->  0
+      right -> +1
+    """
+    left, mid, right = v
+    total = left + mid + right
+    if total < 1e-6:
+        return 0.0
+
+    pos = (-1 * left + 0 * mid + 1 * right) / total
+    return pos
+
+def asymmetry(v):
+    return abs(v[0] - v[2])
+
+# -----------------------------
+# Main control loop
+# -----------------------------
+print("Starting line following with recovery...")
+time.sleep(1)
 
 try:
-    from robot_hat import ADC
-except ImportError:
-    from sim_robot_hat import ADC
+    while True:
+        t_now = time.time()
+        adc = read_grayscale()
 
+        bright_rng = brightness_range(adc)
+        asym = asymmetry(adc)
 
-# ============================================================
-# CONFIGURATION
-# ============================================================
+        # -----------------------------
+        # TRACKING STATE
+        # -----------------------------
+        if state == STATE_TRACKING:
 
-FILTER_ALPHA = 0.7
-CONTROL_DT   = 0.01
+            # Detect possible line loss
+            if bright_rng > BRIGHTNESS_JUMP:
+                state = STATE_LOST_WAIT
+                lost_start_time = t_now
 
-EDGE_THRESH       = 0.05    # minimum normalized edge strength
-EDGE_ASYM_THRESH  = 0.15    # must be asymmetric to count as line
+                px.set_motor_speed(0, 0)
+                print("→ LOST_WAIT (brightness jump)", adc)
 
-LINE_LOST_DELAY = 1.0      # seconds before declaring loss
+            else:
+                # Normal tracking
+                err = compute_error(adc)
+                steer = KP_STEER * err
+                steer = clamp(steer, -MAX_STEER, MAX_STEER)
 
-FORWARD_SPEED = 4
-REVERSE_SPEED = 3
+                px.set_dir_servo_angle(steer)
+                px.forward(BASE_SPEED)
 
+                last_valid_steer = steer
+                last_seen_time = t_now
 
-# ============================================================
-# SENSING
-# ============================================================
+                print(f"TRACK | adc={adc} | err={err:+.3f} | steer={steer:+.1f}")
 
-class LineSensor:
-    def __init__(self, pins=['A0','A1','A2']):
-        self.adc = [ADC(p) for p in pins]
-        self.filt = [0.0, 0.0, 0.0]
+        # -----------------------------
+        # LOST WAIT (debounce)
+        # -----------------------------
+        elif state == STATE_LOST_WAIT:
 
-    def read(self):
-        raw = [a.read() for a in self.adc]
-        for i in range(3):
-            self.filt[i] = (
-                FILTER_ALPHA * raw[i]
-                + (1 - FILTER_ALPHA) * self.filt[i]
-            )
-        return self.filt.copy()
+            # Line reappeared → return to tracking
+            if bright_rng <= BRIGHTNESS_JUMP:
+                state = STATE_TRACKING
+                print("← recovered quickly, back to TRACKING")
 
+            # Line gone long enough → recover
+            elif t_now - lost_start_time >= LINE_LOST_TIME:
+                state = STATE_RECOVERING
+                recover_start_time = t_now
 
-# ============================================================
-# INTERPRETATION — EDGE + ASYMMETRY
-# ============================================================
-
-class LineInterpreter:
-    def __init__(self, polarity='dark'):
-        self.polarity = polarity
-
-    def compute(self, v):
-        """
-        Returns:
-            err   : signed error in [-1, 1]
-            valid : True if a real line edge is detected
-        """
-        L, C, R = v
-
-        # Adjacent differences (edges)
-        dLC = C - L
-        dCR = R - C
-
-        if self.polarity == 'light':
-            dLC = -dLC
-            dCR = -dCR
-
-        # Normalize by local contrast
-        contrast = abs(L - C) + abs(C - R) + 1e-6
-        dLC /= contrast
-        dCR /= contrast
-
-        edge_strength = max(abs(dLC), abs(dCR))
-        edge_asym     = abs(abs(dLC) - abs(dCR))
-
-        # ---------- VALIDITY TEST ----------
-        if edge_strength < EDGE_THRESH or edge_asym < EDGE_ASYM_THRESH:
-            return 0.0, False
-
-        # ---------- SIGNED ERROR ----------
-        if abs(dLC) > abs(dCR):
-            err = +dLC    # line on left → steer right
-        else:
-            err = -dCR    # line on right → steer left
-
-        err = max(-1.0, min(1.0, 0.7 * err))
-        return err, True
-
-
-# ============================================================
-# PD CONTROLLER
-# ============================================================
-
-class PDController:
-    def __init__(self, Kp=14.0, Kd=2.0, max_angle=30.0):
-        self.Kp = Kp
-        self.Kd = Kd
-        self.max = max_angle
-        self.e_last = 0.0
-        self.t_last = time()
-
-    def step(self, e):
-        now = time()
-        dt = max(now - self.t_last, 1e-4)
-
-        de = (e - self.e_last) / dt
-        u  = self.Kp * e + self.Kd * de
-
-        u = max(-self.max, min(self.max, u))
-
-        self.e_last = e
-        self.t_last = now
-        return u
-
-    def reset(self):
-        self.e_last = 0.0
-        self.t_last = time()
-
-
-# ============================================================
-# MAIN LOOP
-# ============================================================
-
-if __name__ == "__main__":
-
-    px      = Picarx()
-    sensor  = LineSensor()
-    interp  = LineInterpreter(polarity='dark')
-    ctrl    = PDController()
-
-    last_valid_time  = time()
-    last_valid_steer = 0.0
-
-    try:
-        while True:
-            v = sensor.read()
-            err, valid = interp.compute(v)
-
-            now = time()
-
-            # ==================================================
-            # LINE LOST HANDLING
-            # ==================================================
-            if not valid:
-                lost_time = now - last_valid_time
-
-                # --- ignore brief dropouts ---
-                if lost_time < LINE_LOST_DELAY:
-                    px.forward(FORWARD_SPEED)
-                    sleep(CONTROL_DT)
-                    continue
-
-                # --- true loss: reverse ---
-                px.stop()
                 px.set_dir_servo_angle(last_valid_steer)
+                px.backward(abs(REVERSE_SPEED))
 
-                px.backward(REVERSE_SPEED)
-                sleep(lost_time)
+                print("→ RECOVERING (reverse)")
 
-                px.stop()
-                ctrl.reset()
-                sleep(0.05)
-                continue
+            else:
+                px.set_motor_speed(0, 0)
 
-            # ==================================================
-            # NORMAL TRACKING
-            # ==================================================
-            steer = ctrl.step(err)
+        # -----------------------------
+        # RECOVERY STATE
+        # -----------------------------
+        elif state == STATE_RECOVERING:
 
-            px.set_dir_servo_angle(steer)
-            px.forward(FORWARD_SPEED)
+            # If contrast normal again → resume tracking
+            if bright_rng <= BRIGHTNESS_JUMP and asym > ASYM_THRESHOLD:
+                state = STATE_TRACKING
+                print("← line reacquired, TRACKING")
 
-            last_valid_time  = now
-            last_valid_steer = steer
+            else:
+                px.set_dir_servo_angle(last_valid_steer)
+                px.backward(abs(REVERSE_SPEED))
 
-            print(
-                f"adc={[round(x,1) for x in v]} | "
-                f"valid={valid} | "
-                f"err={err:+.3f} | "
-                f"steer={steer:+.1f}"
-            )
+                print(f"RECOVER | adc={adc} | steer={last_valid_steer:+.1f}")
 
-            sleep(CONTROL_DT)
+        time.sleep(CONTROL_DT)
 
-    except KeyboardInterrupt:
-        print("\nStopping...")
-        px.stop()
-        sleep(0.1)
+except KeyboardInterrupt:
+    print("\nStopping robot.")
+    px.stop()
