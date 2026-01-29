@@ -4,7 +4,7 @@ from picarx import Picarx
 try:
     from robot_hat import ADC
 except ImportError:
-    from sim_robot_hat import ADC
+        from sim_robot_hat import ADC
 
 
 # ============================================================
@@ -13,8 +13,12 @@ except ImportError:
 REFERENCE = [1400, 1400, 1400]   # required by assignment
 FILTER_ALPHA = 0.5              # sensor LPF
 
-EDGE_MAG_THRESH = 0.15          # minimum usable edge
+EDGE_MAG_THRESH = 0.15
 CONTROL_DT = 0.01
+
+# Speed control
+MIN_SPEED = 4                   # never stop completely
+K_SPEED   = 0.8                 # speed reduction gain (tune this)
 
 
 # ============================================================
@@ -31,9 +35,6 @@ class LineSensor:
             self.filt[i] = FILTER_ALPHA * raw[i] + (1 - FILTER_ALPHA) * self.filt[i]
         return self.filt.copy()
 
-    def status(self, v):
-        return [0 if v[i] <= REFERENCE[i] else 1 for i in range(3)]
-
 
 # ============================================================
 # INTERPRETATION — EDGE DETECTION
@@ -49,7 +50,6 @@ class LineInterpreter:
         mu = (L + C + R) / 3.0
         Lr, Cr, Rr = L - mu, C - mu, R - mu
 
-        # Adjacent differences (edges)
         dLC = Cr - Lr
         dCR = Rr - Cr
 
@@ -57,29 +57,25 @@ class LineInterpreter:
             dLC = -dLC
             dCR = -dCR
 
-        # Normalize by local contrast
         spread = max(abs(Lr), abs(Cr), abs(Rr)) + 1e-6
         dLC /= spread
         dCR /= spread
 
         edge_mag = max(abs(dLC), abs(dCR))
 
-        # ---- Corner override: both edges strong ----
+        # Corner override
         if abs(dLC) > 0.6 and abs(dCR) > 0.6:
             e = -(dLC + dCR)
             return max(-1.0, min(1.0, e))
 
-        # ---- Weak edge → straight ----
         if edge_mag < EDGE_MAG_THRESH:
             return 0.0
 
-        # ---- Dominant edge ----
         if abs(dLC) > abs(dCR):
-            e = +dLC     # line on left → steer right
+            e = +dLC
         else:
-            e = -dCR     # line on right → steer left
+            e = -dCR
 
-        # Confidence scaling
         confidence = min(1.0, edge_mag / EDGE_MAG_THRESH)
         e *= confidence
 
@@ -120,7 +116,7 @@ class PDController:
 
 
 # ============================================================
-# MAIN LOOP (WITH CURVE-AWARE SPEED CONTROL)
+# MAIN LOOP
 # ============================================================
 if __name__ == "__main__":
 
@@ -135,26 +131,20 @@ if __name__ == "__main__":
         while True:
             v = sensor.read()
 
-            # Line lost → straighten and creep
             if interp.line_lost(v):
                 px.set_dir_servo_angle(0)
-                px.forward(px_power // 2)
+                px.forward(MIN_SPEED)
                 ctrl.reset()
                 sleep(0.05)
                 continue
 
             err = interp.compute_error(v)
 
-            # -------------------------------
-            # CURVATURE-AWARE SPEED SCHEDULING
-            # -------------------------------
-            err_mag = abs(err)
-            if err_mag < 0.15:
-                speed = px_power
-            elif err_mag < 0.40:
-                speed = int(px_power * 0.7)
-            else:
-                speed = int(px_power * 0.5)
+            # ----------------------------------
+            # CONTINUOUS SPEED SCALING
+            # ----------------------------------
+            speed = px_power * (1.0 - K_SPEED * abs(err))
+            speed = max(MIN_SPEED, min(px_power, int(speed)))
 
             steer = ctrl.step(err)
 
