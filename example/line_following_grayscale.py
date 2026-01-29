@@ -1,3 +1,4 @@
+
 from time import sleep, time
 from picarx import Picarx
 
@@ -7,19 +8,17 @@ except ImportError:
     from sim_robot_hat import ADC
 
 
-# ============================================================
-# CONFIGURATION
-# ============================================================
 REFERENCE = [1400, 1400, 1400]   # required by assignment
 FILTER_ALPHA = 0.5              # sensor LPF
 
-EDGE_MAG_THRESH  = 0.15         # minimum usable edge
-CONTROL_DT       = 0.01
+EDGE_MAG_THRESH   = 0.8        # minimum edge strength
+EDGE_ASYM_THRESH  = 0.10        # must be directional
+
+CONTROL_DT = 0.01
 
 
-# ============================================================
-# SENSING
-# ============================================================
+
+#Sensing
 class LineSensor:
     def __init__(self, pins=['A0','A1','A2']):
         self.adc = [ADC(p) for p in pins]
@@ -32,12 +31,11 @@ class LineSensor:
         return self.filt.copy()
 
     def status(self, v):
+        # binary comparator (used only for lost-line detection)
         return [0 if v[i] <= REFERENCE[i] else 1 for i in range(3)]
 
 
-# ============================================================
-# INTERPRETATION — EDGE-BASED (INSTRUCTION-COMPLIANT)
-# ============================================================
+#Interpreter
 class LineInterpreter:
     def __init__(self, polarity='dark'):
         self.polarity = polarity
@@ -45,11 +43,11 @@ class LineInterpreter:
     def compute_error(self, v):
         L, C, R = v
 
-        # --- Remove global brightness ---
+        #  Remove global brightness
         mu = (L + C + R) / 3.0
         Lr, Cr, Rr = L - mu, C - mu, R - mu
 
-        # Adjacent differences (edges)
+        # Adjacent differences = edges
         dLC = Cr - Lr
         dCR = Rr - Cr
 
@@ -62,47 +60,32 @@ class LineInterpreter:
         dLC /= spread
         dCR /= spread
 
-        edge_mag = max(abs(dLC), abs(dCR))
+        edge_mag  = max(abs(dLC), abs(dCR))
+        edge_asym = abs(abs(dLC) - abs(dCR))
 
-        # --------------------------------------------------------
-        # HARD CORNER OVERRIDE (both edges strong)
-        # --------------------------------------------------------
-        if abs(dLC) > 0.6 and abs(dCR) > 0.6:
-            e = -(dLC + dCR)
-            return max(-1.0, min(1.0, e))
-
-        # --------------------------------------------------------
-        # WEAK EDGE → GO STRAIGHT
-        # --------------------------------------------------------
-        if edge_mag < EDGE_MAG_THRESH:
+        # No reliable edge → go straight
+        if edge_mag < EDGE_MAG_THRESH or edge_asym < EDGE_ASYM_THRESH:
             return 0.0
 
-        # --------------------------------------------------------
-        # DOMINANT EDGE SELECTION
-        # --------------------------------------------------------
+        # Choose dominant edge (soft, signed) 
         if abs(dLC) > abs(dCR):
-            e = +dLC     # left edge → steer right
+            e = +dLC     # left edge → line on left → steer right
         else:
-            e = -dCR     # right edge → steer left
+            e = -dCR     # right edge → line on right → steer left
 
-        # --------------------------------------------------------
-        # CONFIDENCE SCALING (smooth, not binary)
-        # --------------------------------------------------------
-        confidence = min(1.0, edge_mag / EDGE_MAG_THRESH)
-        e *= confidence
-
-        return max(-1.0, min(1.0, e))
+        # Soft clamp (prevents ±1 snapping)
+        e = max(-1.0, min(1.0, 0.7 * e))
+        return e
 
     def line_lost(self, v):
+        # If contrast collapses entirely
         mu = sum(v) / 3.0
         return max(abs(x - mu) for x in v) < 25
 
 
-# ============================================================
-# PD CONTROLLER (FAST EDGE RESPONSE)
-# ============================================================
+#PD Controller
 class PDController:
-    def __init__(self, Kp=16.0, Kd=5.0, max_angle=30.0):
+    def __init__(self, Kp=18.0, Kd=3.0, max_angle=30.0):
         self.Kp = Kp
         self.Kd = Kd
         self.max = max_angle
@@ -127,9 +110,7 @@ class PDController:
         self.t_last = time()
 
 
-# ============================================================
-# MAIN LOOP
-# ============================================================
+#Main
 if __name__ == "__main__":
 
     px = Picarx()
@@ -142,7 +123,9 @@ if __name__ == "__main__":
     try:
         while True:
             v = sensor.read()
+            s = sensor.status(v)
 
+            # Line lost → straighten + slow forward
             if interp.line_lost(v):
                 px.set_dir_servo_angle(0)
                 px.forward(px_power // 2)
