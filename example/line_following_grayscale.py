@@ -10,21 +10,19 @@ except ImportError:
 # ============================================================
 # CONFIGURATION
 # ============================================================
-REFERENCE = [1400, 1400, 1400]   # assignment requirement
-FILTER_ALPHA = 0.7              # sensor LPF
 
-EDGE_MAG_THRESH = 0.12          # minimum usable edge strength
-LOST_DELAY = 0.5             # seconds before declaring loss
+FILTER_ALPHA = 0.7
+EDGE_THRESH  = 0.05
+CONTROL_DT  = 0.01
 
-CONTROL_DT = 0.01
-
-FORWARD_SPEED = 4
-REVERSE_SPEED = 4
+FORWARD_SPEED = 4          # slow for curves
+REVERSE_SPEED = 3          # slightly slower reverse
 
 
 # ============================================================
 # SENSING
 # ============================================================
+
 class LineSensor:
     def __init__(self, pins=['A0','A1','A2']):
         self.adc = [ADC(p) for p in pins]
@@ -33,13 +31,17 @@ class LineSensor:
     def read(self):
         raw = [a.read() for a in self.adc]
         for i in range(3):
-            self.filt[i] = FILTER_ALPHA * raw[i] + (1 - FILTER_ALPHA) * self.filt[i]
+            self.filt[i] = (
+                FILTER_ALPHA * raw[i]
+                + (1 - FILTER_ALPHA) * self.filt[i]
+            )
         return self.filt.copy()
 
 
 # ============================================================
-# INTERPRETATION — EDGE DETECTION (RETURNS VALIDITY)
+# INTERPRETATION — EDGE BASED
 # ============================================================
+
 class LineInterpreter:
     def __init__(self, polarity='dark'):
         self.polarity = polarity
@@ -47,45 +49,37 @@ class LineInterpreter:
     def compute_error(self, v):
         L, C, R = v
 
-        # Remove global brightness
-        mu = (L + C + R) / 3.0
-        Lr, Cr, Rr = L - mu, C - mu, R - mu
-
-        # Adjacent differences (edges)
-        dLC = Cr - Lr
-        dCR = Rr - Cr
+        dLC = C - L
+        dCR = R - C
 
         if self.polarity == 'light':
             dLC = -dLC
             dCR = -dCR
 
-        # Normalize by contrast
-        spread = max(abs(Lr), abs(Cr), abs(Rr)) + 1e-6
-        dLC /= spread
-        dCR /= spread
+        contrast = abs(L - C) + abs(C - R) + 1e-6
+        dLC /= contrast
+        dCR /= contrast
 
-        edge_mag = max(abs(dLC), abs(dCR))
+        if max(abs(dLC), abs(dCR)) < EDGE_THRESH:
+            return None   # <<< explicitly say "no line"
 
-        # ❗ No usable edge
-        if edge_mag < EDGE_MAG_THRESH:
-            return 0.0, False
-
-        # Choose dominant edge
         if abs(dLC) > abs(dCR):
-            e = +dLC      # line on left → steer right
+            e = +dLC
         else:
-            e = -dCR      # line on right → steer left
+            e = -dCR
 
-        # Soft clamp
-        e = max(-1.0, min(1.0, 0.7 * e))
-        return e, True
+        return max(-1.0, min(1.0, 0.7 * e))
+
+    def line_lost(self, v):
+        return max(v) - min(v) < 20
 
 
 # ============================================================
 # PD CONTROLLER
 # ============================================================
+
 class PDController:
-    def __init__(self, Kp=16.0, Kd=3.0, max_angle=30.0):
+    def __init__(self, Kp=14.0, Kd=2.0, max_angle=30.0):
         self.Kp = Kp
         self.Kd = Kd
         self.max = max_angle
@@ -93,8 +87,8 @@ class PDController:
         self.t_last = time()
 
     def step(self, e):
-        t = time()
-        dt = max(t - self.t_last, 1e-4)
+        now = time()
+        dt = max(now - self.t_last, 1e-4)
 
         de = (e - self.e_last) / dt
         u = self.Kp * e + self.Kd * de
@@ -102,7 +96,7 @@ class PDController:
         u = max(-self.max, min(self.max, u))
 
         self.e_last = e
-        self.t_last = t
+        self.t_last = now
         return u
 
     def reset(self):
@@ -113,6 +107,7 @@ class PDController:
 # ============================================================
 # MAIN LOOP
 # ============================================================
+
 if __name__ == "__main__":
 
     px = Picarx()
@@ -120,52 +115,46 @@ if __name__ == "__main__":
     interp = LineInterpreter(polarity='dark')
     ctrl   = PDController()
 
-    last_seen_time = time()
-    last_steer = 0.0
+    last_valid_time  = time()
+    last_valid_steer = 0.0
 
     try:
         while True:
-            now = time()
             v = sensor.read()
+            err = interp.compute_error(v)
 
-            err, valid = interp.compute_error(v)
+            # ---------- LINE LOST ----------
+            if err is None or interp.line_lost(v):
 
-            # -------------------------
-            # LINE CONFIDENTLY DETECTED
-            # -------------------------
-            if valid:
-                last_seen_time = now
-                steer = ctrl.step(err)
-                last_steer = steer
+                # compute distance-equivalent reverse time
+                t_lost = time() - last_valid_time
+                reverse_time = min(t_lost, 1.0)  # safety cap
 
-                px.set_dir_servo_angle(steer)
-                px.forward(FORWARD_SPEED)
+                px.stop()
+                px.set_dir_servo_angle(last_valid_steer)
 
-            # -------------------------
-            # LINE NOT CONFIDENT
-            # -------------------------
-            else:
-                t_lost = now - last_seen_time
-
-                # Ignore brief losses
-                if t_lost < LOST_DELAY:
-                    px.forward(FORWARD_SPEED)
-                    continue
-
-                # TRUE LINE LOSS → REVERSE
-                print(f"LINE LOST ({t_lost:.2f}s) → REVERSING")
-
-                px.set_dir_servo_angle(last_steer)
                 px.backward(REVERSE_SPEED)
-                sleep(t_lost)
+                sleep(reverse_time)
 
                 px.stop()
                 ctrl.reset()
+                sleep(0.05)
+                continue
+
+            # ---------- NORMAL OPERATION ----------
+            steer = ctrl.step(err)
+
+            px.set_dir_servo_angle(steer)
+            px.forward(FORWARD_SPEED)
+
+            # remember last valid state
+            last_valid_time  = time()
+            last_valid_steer = steer
 
             print(
                 f"adc={[round(x,1) for x in v]} | "
                 f"err={err:+.3f} | "
-                f"steer={last_steer:+.1f}"
+                f"steer={steer:+.1f}"
             )
 
             sleep(CONTROL_DT)
