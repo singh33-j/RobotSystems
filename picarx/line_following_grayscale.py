@@ -22,7 +22,7 @@ REACQUIRE_THRESH    = 100     # <<< hysteresis lower bound
 REACQUIRE_COUNT_REQ = 5       # <<< consecutive samples
 
 # --- Steering shaping ---
-ERROR_GAIN         = 8.0
+ERROR_GAIN         = 10.0
 ERROR_DEADZONE     = 0.05
 STEER_DEADZONE_DEG = 1.5
 MAX_STEER_DEG      = 30.0
@@ -83,10 +83,7 @@ class LineInterpreter:
 
         e *= ERROR_GAIN
 
-        if abs(e) < ERROR_DEADZONE:
-            e = 0.0
-
-        return max(-1.0, min(1.0, e))
+        return e
 
     def line_lost(self, drop_sum):
         return drop_sum > DROP_SUM_THRESH
