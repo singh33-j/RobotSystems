@@ -21,7 +21,7 @@ MAX_STEER_DEG = 30.0
 STEER_GAIN = 0.15
 STEER_DEADZONE = 2.0
 
-FORWARD_SPEED = 18
+FORWARD_SPEED = 28
 
 
 # ============================================================
@@ -116,7 +116,7 @@ if __name__ == "__main__":
             if error_px is None:
                 print("no error -> steering 0")
                 px.set_dir_servo_angle(0)
-                px.forward(10)
+                px.forward(28)
                 sleep(0.05)
                 continue
 
