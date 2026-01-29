@@ -97,7 +97,7 @@ class LineInterpreter:
 # ============================================================
 
 class PDController:
-    def __init__(self, Kp=14.0, Kd=2.0, max_angle=30.0):
+    def __init__(self, Kp=20.0, Kd=4.0, max_angle=30.0):
         self.Kp = Kp
         self.Kd = Kd
         self.max = max_angle
@@ -143,7 +143,7 @@ if __name__ == "__main__":
             # ---------------- STARTUP STRAIGHT ----------------
             if elapsed < STARTUP_STRAIGHT_TIME:
                 px.set_dir_servo_angle(0)
-                px.forward(30)      # <<< CHANGED
+                px.forward(20)      # <<< CHANGED
                 ctrl.reset()
 
                 print("STARTUP | line_lost=False | steer=0")
@@ -172,7 +172,7 @@ if __name__ == "__main__":
                 sleep(STOP_BEFORE_REVERSE)
 
                 px.set_dir_servo_angle(0)
-                px.backward(30)     # <<< CHANGED
+                px.backward(20)     # <<< CHANGED
                 sleep(0.5)
 
                 px.stop()
@@ -186,7 +186,7 @@ if __name__ == "__main__":
             steer = ctrl.step(err)
 
             px.set_dir_servo_angle(steer)
-            px.forward(30)          # <<< CHANGED
+            px.forward(20)          # <<< CHANGED
 
             print(
                 f"TRACK | adc={[round(x) for x in v]} | "
