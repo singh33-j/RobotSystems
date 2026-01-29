@@ -14,8 +14,8 @@ except ImportError:
 REFERENCE = [1400, 1400, 1400]   # required by assignment (binary only)
 FILTER_ALPHA = 0.7              # faster sensor response
 
-EDGE_MAG_THRESH  = 0.1          # minimum usable edge
-EDGE_ASYM_THRESH = 0.05         # edge must be directional
+EDGE_MAG_THRESH  = 0.05          # minimum usable edge
+EDGE_ASYM_THRESH = 0.03       # edge must be directional
 
 CONTROL_DT = 0.01
 
