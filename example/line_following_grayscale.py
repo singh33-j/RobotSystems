@@ -1,4 +1,4 @@
-from time import sleep, time
+from time import sleep
 from picarx import Picarx
 
 try:
@@ -18,6 +18,7 @@ FORWARD_SPEED  = 14
 REVERSE_SPEED  = 14
 
 DROP_THRESHOLD = 600   # sum of brightness drops
+STOP_TIME      = 1.0   # seconds to stop before reversing
 
 
 # ============================================================
@@ -52,7 +53,7 @@ class LineSensor:
 
 
 # ============================================================
-# INTERPRETER (simple proportional steering)
+# INTERPRETER
 # ============================================================
 
 class LineInterpreter:
@@ -73,6 +74,7 @@ if __name__ == "__main__":
     interp = LineInterpreter()
 
     last_steer = 0.0
+    reversing = False
 
     try:
         while True:
@@ -82,24 +84,30 @@ if __name__ == "__main__":
             line_lost = drop_sum >= DROP_THRESHOLD
 
             if line_lost:
-                # -------- REVERSE --------
+                # ---------- STOP ----------
                 px.stop()
-                sleep(0.02)
-
-                px.set_dir_servo_angle(last_steer)
-                px.backward(REVERSE_SPEED)
 
                 print(
-                    f"REVERSE | adc={[int(x) for x in adc]} "
+                    f"STOP | adc={[int(x) for x in adc]} "
                     f"| drops={[int(d) for d in drops]} "
                     f"| drop_sum={int(drop_sum)} "
                     f"| line_lost={line_lost}"
                 )
 
+                sleep(STOP_TIME)
+
+                # ---------- REVERSE ----------
+                px.set_dir_servo_angle(last_steer)
+                px.backward(REVERSE_SPEED)
+
+                print(
+                    f"REVERSE | steer={last_steer:+.1f}"
+                )
+
                 sleep(CONTROL_DT)
                 continue
 
-            # -------- NORMAL TRACKING --------
+            # ---------- NORMAL TRACKING ----------
             err = interp.compute_error(adc)
             steer = max(-30.0, min(30.0, 25.0 * err))
 
