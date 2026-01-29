@@ -12,13 +12,15 @@ except ImportError:
 # ============================================================
 
 FILTER_ALPHA = 0.7
-EDGE_THRESH  = 0.05          # sensitivity to subtle edges
-CONTROL_DT  = 0.01
+CONTROL_DT   = 0.01
+
+EDGE_THRESH       = 0.05    # minimum normalized edge strength
+EDGE_ASYM_THRESH  = 0.15    # must be asymmetric to count as line
+
+LINE_LOST_DELAY = 0.5       # seconds before declaring loss
 
 FORWARD_SPEED = 4
 REVERSE_SPEED = 3
-
-LINE_LOST_DELAY = 0.5        # seconds before reversing
 
 
 # ============================================================
@@ -41,17 +43,22 @@ class LineSensor:
 
 
 # ============================================================
-# INTERPRETATION — EDGE-BASED WITH CONFIDENCE
+# INTERPRETATION — EDGE + ASYMMETRY
 # ============================================================
 
 class LineInterpreter:
     def __init__(self, polarity='dark'):
         self.polarity = polarity
 
-    def compute_error(self, v):
+    def compute(self, v):
+        """
+        Returns:
+            err   : signed error in [-1, 1]
+            valid : True if a real line edge is detected
+        """
         L, C, R = v
 
-        # Adjacent differences = edges
+        # Adjacent differences (edges)
         dLC = C - L
         dCR = R - C
 
@@ -65,19 +72,20 @@ class LineInterpreter:
         dCR /= contrast
 
         edge_strength = max(abs(dLC), abs(dCR))
+        edge_asym     = abs(abs(dLC) - abs(dCR))
 
-        # Edge unreliable
-        if edge_strength < EDGE_THRESH:
+        # ---------- VALIDITY TEST ----------
+        if edge_strength < EDGE_THRESH or edge_asym < EDGE_ASYM_THRESH:
             return 0.0, False
 
-        # Choose dominant edge
+        # ---------- SIGNED ERROR ----------
         if abs(dLC) > abs(dCR):
-            e = +dLC        # line on left → steer right
+            err = +dLC    # line on left → steer right
         else:
-            e = -dCR        # line on right → steer left
+            err = -dCR    # line on right → steer left
 
-        e = max(-1.0, min(1.0, 0.7 * e))
-        return e, True
+        err = max(-1.0, min(1.0, 0.7 * err))
+        return err, True
 
 
 # ============================================================
@@ -97,7 +105,7 @@ class PDController:
         dt = max(now - self.t_last, 1e-4)
 
         de = (e - self.e_last) / dt
-        u = self.Kp * e + self.Kd * de
+        u  = self.Kp * e + self.Kd * de
 
         u = max(-self.max, min(self.max, u))
 
@@ -116,46 +124,48 @@ class PDController:
 
 if __name__ == "__main__":
 
-    px = Picarx()
-    sensor = LineSensor()
-    interp = LineInterpreter(polarity='dark')
-    ctrl   = PDController()
+    px      = Picarx()
+    sensor  = LineSensor()
+    interp  = LineInterpreter(polarity='dark')
+    ctrl    = PDController()
 
     last_valid_time  = time()
     last_valid_steer = 0.0
 
     try:
         while True:
-            now = time()
             v = sensor.read()
+            err, valid = interp.compute(v)
 
-            err, valid = interp.compute_error(v)
+            now = time()
 
-            # -------- LINE UNRELIABLE / LOST --------
+            # ==================================================
+            # LINE LOST HANDLING
+            # ==================================================
             if not valid:
-                t_lost = now - last_valid_time
+                lost_time = now - last_valid_time
 
-                # grace period — do nothing yet
-                if t_lost < LINE_LOST_DELAY:
+                # --- ignore brief dropouts ---
+                if lost_time < LINE_LOST_DELAY:
                     px.forward(FORWARD_SPEED)
                     sleep(CONTROL_DT)
                     continue
 
-                # confirmed loss → reverse
+                # --- true loss: reverse ---
                 px.stop()
                 px.set_dir_servo_angle(last_valid_steer)
 
                 px.backward(REVERSE_SPEED)
-                sleep(t_lost)
+                sleep(lost_time)
 
                 px.stop()
                 ctrl.reset()
-
-                last_valid_time = now
                 sleep(0.05)
                 continue
 
-            # -------- NORMAL TRACKING --------
+            # ==================================================
+            # NORMAL TRACKING
+            # ==================================================
             steer = ctrl.step(err)
 
             px.set_dir_servo_angle(steer)
