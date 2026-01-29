@@ -8,7 +8,7 @@ except ImportError:
 
 
 # ============================================================
-# CONFIG
+# CONFIGURATION
 # ============================================================
 
 FILTER_ALPHA = 0.7
@@ -16,8 +16,12 @@ EDGE_THRESH  = 0.05
 CONTROL_DT   = 0.01
 
 FORWARD_SPEED = 4
+REVERSE_SPEED = 3
 
-STARTUP_STRAIGHT_TIME = 0.2   # <<< THIS IS THE FIX
+STARTUP_STRAIGHT_TIME = 0.2
+STOP_BEFORE_REVERSE  = 1.0
+
+DROP_SUM_THRESH = 600   # <<< YOUR LINE-LOSS CONDITION
 
 
 # ============================================================
@@ -28,6 +32,7 @@ class LineSensor:
     def __init__(self, pins=['A0','A1','A2']):
         self.adc = [ADC(p) for p in pins]
         self.filt = [0.0, 0.0, 0.0]
+        self.prev = None
 
     def read(self):
         raw = [a.read() for a in self.adc]
@@ -36,11 +41,26 @@ class LineSensor:
                 FILTER_ALPHA * raw[i]
                 + (1 - FILTER_ALPHA) * self.filt[i]
             )
-        return self.filt.copy()
+
+        v = self.filt.copy()
+
+        # initialize previous on first call
+        if self.prev is None:
+            self.prev = v.copy()
+
+        return v
+
+    def brightness_drop(self, v):
+        drops = [
+            max(0.0, self.prev[i] - v[i])
+            for i in range(3)
+        ]
+        self.prev = v.copy()
+        return drops
 
 
 # ============================================================
-# INTERPRETER
+# INTERPRETATION
 # ============================================================
 
 class LineInterpreter:
@@ -65,13 +85,18 @@ class LineInterpreter:
             return 0.0
 
         if abs(dLC) > abs(dCR):
-            return max(-1.0, min(1.0, 0.7 * dLC))
+            e = +dLC
         else:
-            return max(-1.0, min(1.0, -0.7 * dCR))
+            e = -dCR
+
+        return max(-1.0, min(1.0, 0.7 * e))
+
+    def line_lost(self, drop_sum):
+        return drop_sum > DROP_SUM_THRESH
 
 
 # ============================================================
-# PD CONTROLLER
+# CONTROLLER
 # ============================================================
 
 class PDController:
@@ -100,14 +125,14 @@ class PDController:
 
 
 # ============================================================
-# MAIN
+# MAIN LOOP
 # ============================================================
 
 if __name__ == "__main__":
 
     px     = Picarx()
     sensor = LineSensor()
-    interp = LineInterpreter()
+    interp = LineInterpreter(polarity='dark')
     ctrl   = PDController()
 
     start_time = time()
@@ -115,19 +140,46 @@ if __name__ == "__main__":
     try:
         while True:
 
-            # ---------------- STARTUP STRAIGHT ----------------
+            # ---------------- STARTUP ----------------
             if time() - start_time < STARTUP_STRAIGHT_TIME:
                 px.set_dir_servo_angle(0)
                 px.forward(FORWARD_SPEED)
                 ctrl.reset()
-
-                print("STARTUP | steering=0")
+                print("STARTUP | line_lost=False | steer=0")
                 sleep(CONTROL_DT)
                 continue
-            # --------------------------------------------------
+            # -----------------------------------------
 
-            v   = sensor.read()
-            err = interp.compute_error(v)
+            v = sensor.read()
+            drops = sensor.brightness_drop(v)
+            drop_sum = sum(drops)
+
+            lost = interp.line_lost(drop_sum)
+
+            # ---------------- LINE LOST ----------------
+            if lost:
+                px.stop()
+                print(
+                    f"REVERSE | adc={[round(x) for x in v]} | "
+                    f"drops={[round(d) for d in drops]} | "
+                    f"drop_sum={round(drop_sum)} | "
+                    f"line_lost=True"
+                )
+
+                sleep(STOP_BEFORE_REVERSE)
+
+                px.set_dir_servo_angle(0)
+                px.backward(REVERSE_SPEED)
+                sleep(0.5)
+
+                px.stop()
+                ctrl.reset()
+                sleep(0.1)
+                continue
+            # ------------------------------------------
+
+            # ---------------- TRACKING ----------------
+            err   = interp.compute_error(v)
             steer = ctrl.step(err)
 
             px.set_dir_servo_angle(steer)
@@ -135,7 +187,11 @@ if __name__ == "__main__":
 
             print(
                 f"TRACK | adc={[round(x) for x in v]} | "
-                f"err={err:+.3f} | steer={steer:+.1f}"
+                f"drops={[round(d) for d in drops]} | "
+                f"drop_sum={round(drop_sum)} | "
+                f"line_lost={lost} | "
+                f"err={err:+.3f} | "
+                f"steer={steer:+.1f}"
             )
 
             sleep(CONTROL_DT)
