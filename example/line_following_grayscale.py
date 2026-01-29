@@ -12,14 +12,13 @@ except ImportError:
 # ============================================================
 
 FILTER_ALPHA = 0.7
-EDGE_THRESH  = 0.05
+EDGE_THRESH  = 0.05          # sensitivity to subtle edges
 CONTROL_DT  = 0.01
 
 FORWARD_SPEED = 4
 REVERSE_SPEED = 3
 
-LINE_LOST_DELAY = 0.5     # <<< only reverse if lost > 0.5 s
-MAX_REVERSE_TIME = 1.0    # safety cap (can remove later)
+LINE_LOST_DELAY = 0.5        # seconds before reversing
 
 
 # ============================================================
@@ -42,7 +41,7 @@ class LineSensor:
 
 
 # ============================================================
-# INTERPRETATION — EDGE BASED
+# INTERPRETATION — EDGE-BASED WITH CONFIDENCE
 # ============================================================
 
 class LineInterpreter:
@@ -52,6 +51,7 @@ class LineInterpreter:
     def compute_error(self, v):
         L, C, R = v
 
+        # Adjacent differences = edges
         dLC = C - L
         dCR = R - C
 
@@ -59,23 +59,25 @@ class LineInterpreter:
             dLC = -dLC
             dCR = -dCR
 
+        # Normalize by local contrast
         contrast = abs(L - C) + abs(C - R) + 1e-6
         dLC /= contrast
         dCR /= contrast
 
-        if max(abs(dLC), abs(dCR)) < EDGE_THRESH:
-            return None   # no reliable line
+        edge_strength = max(abs(dLC), abs(dCR))
 
+        # Edge unreliable
+        if edge_strength < EDGE_THRESH:
+            return 0.0, False
+
+        # Choose dominant edge
         if abs(dLC) > abs(dCR):
-            e = +dLC     # line on left → steer right
+            e = +dLC        # line on left → steer right
         else:
-            e = -dCR     # line on right → steer left
+            e = -dCR        # line on right → steer left
 
-        return max(-1.0, min(1.0, 0.7 * e))
-
-    def line_lost(self, v):
-        # contrast collapse test
-        return max(v) - min(v) < 20
+        e = max(-1.0, min(1.0, 0.7 * e))
+        return e, True
 
 
 # ============================================================
@@ -124,38 +126,36 @@ if __name__ == "__main__":
 
     try:
         while True:
-            v = sensor.read()
-            err = interp.compute_error(v)
             now = time()
+            v = sensor.read()
 
-            # ---------- LINE LOST OR UNCERTAIN ----------
-            if err is None or interp.line_lost(v):
+            err, valid = interp.compute_error(v)
 
+            # -------- LINE UNRELIABLE / LOST --------
+            if not valid:
                 t_lost = now - last_valid_time
 
-                # Ignore brief losses
+                # grace period — do nothing yet
                 if t_lost < LINE_LOST_DELAY:
                     px.forward(FORWARD_SPEED)
                     sleep(CONTROL_DT)
                     continue
 
-                # True loss → reverse
-                reverse_time = min(t_lost, MAX_REVERSE_TIME)
-
-                print(f"LINE LOST {t_lost:.2f}s → reversing {reverse_time:.2f}s")
-
+                # confirmed loss → reverse
                 px.stop()
                 px.set_dir_servo_angle(last_valid_steer)
 
                 px.backward(REVERSE_SPEED)
-                sleep(reverse_time)
+                sleep(t_lost)
 
                 px.stop()
                 ctrl.reset()
+
+                last_valid_time = now
                 sleep(0.05)
                 continue
 
-            # ---------- NORMAL TRACKING ----------
+            # -------- NORMAL TRACKING --------
             steer = ctrl.step(err)
 
             px.set_dir_servo_angle(steer)
@@ -166,6 +166,7 @@ if __name__ == "__main__":
 
             print(
                 f"adc={[round(x,1) for x in v]} | "
+                f"valid={valid} | "
                 f"err={err:+.3f} | "
                 f"steer={steer:+.1f}"
             )
