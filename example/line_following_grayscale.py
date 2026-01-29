@@ -1,10 +1,3 @@
-"""
-Robust Edge-Based Line Following for PiCar-X
-- Relative edge detection (lighting invariant)
-- Edge confidence + asymmetry gating
-- Soft steering (no bang-bang)
-- Natural recovery when line is weak or lost
-"""
 
 from time import sleep, time
 from picarx import Picarx
@@ -15,9 +8,6 @@ except ImportError:
     from sim_robot_hat import ADC
 
 
-# ============================================================
-# CONFIGURATION
-# ============================================================
 REFERENCE = [1400, 1400, 1400]   # required by assignment
 FILTER_ALPHA = 0.5              # sensor LPF
 
@@ -27,9 +17,8 @@ EDGE_ASYM_THRESH  = 0.10        # must be directional
 CONTROL_DT = 0.01
 
 
-# ============================================================
-# SENSING
-# ============================================================
+=
+#Sensing
 class LineSensor:
     def __init__(self, pins=['A0','A1','A2']):
         self.adc = [ADC(p) for p in pins]
@@ -46,9 +35,7 @@ class LineSensor:
         return [0 if v[i] <= REFERENCE[i] else 1 for i in range(3)]
 
 
-# ============================================================
-# INTERPRETATION — EDGE DETECTION (INSTRUCTION-COMPLIANT)
-# ============================================================
+#Interpreter
 class LineInterpreter:
     def __init__(self, polarity='dark'):
         self.polarity = polarity
@@ -56,7 +43,7 @@ class LineInterpreter:
     def compute_error(self, v):
         L, C, R = v
 
-        # --- Remove global brightness ---
+        #  Remove global brightness
         mu = (L + C + R) / 3.0
         Lr, Cr, Rr = L - mu, C - mu, R - mu
 
@@ -76,11 +63,11 @@ class LineInterpreter:
         edge_mag  = max(abs(dLC), abs(dCR))
         edge_asym = abs(abs(dLC) - abs(dCR))
 
-        # --- No reliable edge → go straight ---
+        # No reliable edge → go straight
         if edge_mag < EDGE_MAG_THRESH or edge_asym < EDGE_ASYM_THRESH:
             return 0.0
 
-        # --- Choose dominant edge (soft, signed) ---
+        # Choose dominant edge (soft, signed) 
         if abs(dLC) > abs(dCR):
             e = +dLC     # left edge → line on left → steer right
         else:
@@ -96,9 +83,7 @@ class LineInterpreter:
         return max(abs(x - mu) for x in v) < 25
 
 
-# ============================================================
-# PD CONTROLLER (FIXED GAINS)
-# ============================================================
+#PD Controller
 class PDController:
     def __init__(self, Kp=10.0, Kd=6.0, max_angle=30.0):
         self.Kp = Kp
@@ -125,9 +110,7 @@ class PDController:
         self.t_last = time()
 
 
-# ============================================================
-# MAIN LOOP
-# ============================================================
+#Main
 if __name__ == "__main__":
 
     px = Picarx()
