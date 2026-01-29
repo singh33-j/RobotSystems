@@ -13,10 +13,12 @@ except ImportError:
 
 FILTER_ALPHA = 0.7
 EDGE_THRESH  = 0.05
-CONTROL_DT  = 0.01
+CONTROL_DT   = 0.01
 
-FORWARD_SPEED = 4          # slow for curves
-REVERSE_SPEED = 3          # slightly slower reverse
+FORWARD_SPEED = 4
+REVERSE_SPEED = 3
+
+LOSS_CONFIRM_TIME = 1.0   # <<< REQUIRED: seconds without line
 
 
 # ============================================================
@@ -61,7 +63,7 @@ class LineInterpreter:
         dCR /= contrast
 
         if max(abs(dLC), abs(dCR)) < EDGE_THRESH:
-            return None   # <<< explicitly say "no line"
+            return None
 
         if abs(dLC) > abs(dCR):
             e = +dLC
@@ -70,7 +72,7 @@ class LineInterpreter:
 
         return max(-1.0, min(1.0, 0.7 * e))
 
-    def line_lost(self, v):
+    def weak_contrast(self, v):
         return max(v) - min(v) < 20
 
 
@@ -105,7 +107,7 @@ class PDController:
 
 
 # ============================================================
-# MAIN LOOP
+# MAIN LOOP (LOSS-DEBOUNCED)
 # ============================================================
 
 if __name__ == "__main__":
@@ -115,46 +117,57 @@ if __name__ == "__main__":
     interp = LineInterpreter(polarity='dark')
     ctrl   = PDController()
 
-    last_valid_time  = time()
-    last_valid_steer = 0.0
+    last_valid_time   = time()
+    last_valid_steer  = 0.0
+    loss_start_time   = None
 
     try:
         while True:
             v = sensor.read()
             err = interp.compute_error(v)
 
-            # ---------- LINE LOST ----------
-            if err is None or interp.line_lost(v):
+            # ---------------- LINE PRESENT ----------------
+            if err is not None and not interp.weak_contrast(v):
+                loss_start_time = None
 
-                # compute distance-equivalent reverse time
+                steer = ctrl.step(err)
+                px.set_dir_servo_angle(steer)
+                px.forward(FORWARD_SPEED)
+
+                last_valid_time  = time()
+                last_valid_steer = steer
+
+            # ---------------- POSSIBLE LINE LOSS ----------------
+            else:
+                if loss_start_time is None:
+                    loss_start_time = time()
+
+                # Not lost long enough → keep last command
+                if time() - loss_start_time < LOSS_CONFIRM_TIME:
+                    px.set_dir_servo_angle(last_valid_steer)
+                    px.forward(FORWARD_SPEED)
+                    sleep(CONTROL_DT)
+                    continue
+
+                # ---------------- CONFIRMED LINE LOSS ----------------
                 t_lost = time() - last_valid_time
-                reverse_time = min(t_lost, 1.0)  # safety cap
+                reverse_time = min(t_lost, 1.0)
 
                 px.stop()
                 px.set_dir_servo_angle(last_valid_steer)
-
                 px.backward(REVERSE_SPEED)
                 sleep(reverse_time)
 
                 px.stop()
                 ctrl.reset()
+                loss_start_time = None
                 sleep(0.05)
                 continue
 
-            # ---------- NORMAL OPERATION ----------
-            steer = ctrl.step(err)
-
-            px.set_dir_servo_angle(steer)
-            px.forward(FORWARD_SPEED)
-
-            # remember last valid state
-            last_valid_time  = time()
-            last_valid_steer = steer
-
             print(
                 f"adc={[round(x,1) for x in v]} | "
-                f"err={err:+.3f} | "
-                f"steer={steer:+.1f}"
+                f"err={None if err is None else f'{err:+.3f}'} | "
+                f"steer={last_valid_steer:+.1f}"
             )
 
             sleep(CONTROL_DT)
