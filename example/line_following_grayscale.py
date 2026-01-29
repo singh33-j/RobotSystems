@@ -18,7 +18,7 @@ FORWARD_SPEED = 4
 REVERSE_SPEED = 3
 
 # Line-loss detection
-DROP_THRESH   = 300      # brightness drop per sensor
+DROP_THRESH   = 100      # brightness drop per sensor
 LOSS_TIME_REQ = 0.2      # seconds line must be lost
 
 
