@@ -1,5 +1,5 @@
 from time import sleep, time
-from picarx import Picarx
+from picarx_improved import Picarx
 
 try:
     from robot_hat import ADC
