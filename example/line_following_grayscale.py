@@ -4,21 +4,20 @@ from picarx import Picarx
 try:
     from robot_hat import ADC
 except ImportError:
-        from sim_robot_hat import ADC
+    from sim_robot_hat import ADC
 
 
 # ============================================================
 # CONFIGURATION
 # ============================================================
 REFERENCE = [1400, 1400, 1400]   # required by assignment
-FILTER_ALPHA = 0.5              # sensor LPF
+FILTER_ALPHA = 0.5              # sensor low-pass filter
 
-EDGE_MAG_THRESH = 0.15
+EDGE_MAG_THRESH  = 0.15         # minimum detectable edge
 CONTROL_DT = 0.01
 
-# Speed control
-MIN_SPEED = 4                   # never stop completely
-K_SPEED   = 0.8                 # speed reduction gain (tune this)
+# Motion
+FORWARD_SPEED = 6               # <<< globally slower speed (IMPORTANT)
 
 
 # ============================================================
@@ -37,7 +36,7 @@ class LineSensor:
 
 
 # ============================================================
-# INTERPRETATION — EDGE DETECTION
+# INTERPRETATION — EDGE-BASED ERROR
 # ============================================================
 class LineInterpreter:
     def __init__(self, polarity='dark'):
@@ -50,6 +49,7 @@ class LineInterpreter:
         mu = (L + C + R) / 3.0
         Lr, Cr, Rr = L - mu, C - mu, R - mu
 
+        # Adjacent differences = edges
         dLC = Cr - Lr
         dCR = Rr - Cr
 
@@ -57,29 +57,25 @@ class LineInterpreter:
             dLC = -dLC
             dCR = -dCR
 
+        # Normalize by local contrast
         spread = max(abs(Lr), abs(Cr), abs(Rr)) + 1e-6
         dLC /= spread
         dCR /= spread
 
         edge_mag = max(abs(dLC), abs(dCR))
 
-        # Corner override
-        if abs(dLC) > 0.6 and abs(dCR) > 0.6:
-            e = -(dLC + dCR)
-            return max(-1.0, min(1.0, e))
-
+        # If no usable edge, go straight
         if edge_mag < EDGE_MAG_THRESH:
             return 0.0
 
+        # Choose dominant edge
         if abs(dLC) > abs(dCR):
-            e = +dLC
+            e = +dLC     # left edge → line on left → steer right
         else:
-            e = -dCR
+            e = -dCR     # right edge → line on right → steer left
 
-        confidence = min(1.0, edge_mag / EDGE_MAG_THRESH)
-        e *= confidence
-
-        return max(-1.0, min(1.0, e))
+        # Soft clamp
+        return max(-1.0, min(1.0, 0.7 * e))
 
     def line_lost(self, v):
         mu = sum(v) / 3.0
@@ -90,7 +86,7 @@ class LineInterpreter:
 # PD CONTROLLER
 # ============================================================
 class PDController:
-    def __init__(self, Kp=16.0, Kd=5.0, max_angle=30.0):
+    def __init__(self, Kp=16.0, Kd=3.0, max_angle=30.0):
         self.Kp = Kp
         self.Kd = Kd
         self.max = max_angle
@@ -125,37 +121,28 @@ if __name__ == "__main__":
     interp = LineInterpreter(polarity='dark')
     ctrl   = PDController()
 
-    px_power = 10
-
     try:
         while True:
             v = sensor.read()
 
+            # Line lost → slow, straight recovery
             if interp.line_lost(v):
                 px.set_dir_servo_angle(0)
-                px.forward(MIN_SPEED)
+                px.forward(FORWARD_SPEED // 2)
                 ctrl.reset()
                 sleep(0.05)
                 continue
 
             err = interp.compute_error(v)
-
-            # ----------------------------------
-            # CONTINUOUS SPEED SCALING
-            # ----------------------------------
-            speed = px_power * (1.0 - K_SPEED * abs(err))
-            speed = max(MIN_SPEED, min(px_power, int(speed)))
-
             steer = ctrl.step(err)
 
             px.set_dir_servo_angle(steer)
-            px.forward(speed)
+            px.forward(FORWARD_SPEED)
 
             print(
                 f"adc={[round(x,1) for x in v]} | "
                 f"err={err:+.3f} | "
-                f"steer={steer:+.1f} | "
-                f"spd={speed}"
+                f"steer={steer:+.1f}"
             )
 
             sleep(CONTROL_DT)
