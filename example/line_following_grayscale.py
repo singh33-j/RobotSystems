@@ -15,11 +15,8 @@ FILTER_ALPHA = 0.7
 EDGE_THRESH  = 0.05
 CONTROL_DT   = 0.01
 
-FORWARD_SPEED = 2
-REVERSE_SPEED = 2
-
 STARTUP_STRAIGHT_TIME = 0.2
-LINE_LOSS_ENABLE_TIME = 1.0   # <<< NEW
+LINE_LOSS_ENABLE_TIME = 1.0
 STOP_BEFORE_REVERSE   = 1.0
 
 DROP_SUM_THRESH = 600
@@ -146,7 +143,7 @@ if __name__ == "__main__":
             # ---------------- STARTUP STRAIGHT ----------------
             if elapsed < STARTUP_STRAIGHT_TIME:
                 px.set_dir_servo_angle(0)
-                px.forward(FORWARD_SPEED)
+                px.forward(15)      # <<< CHANGED
                 ctrl.reset()
 
                 print("STARTUP | line_lost=False | steer=0")
@@ -158,7 +155,6 @@ if __name__ == "__main__":
             drops = sensor.brightness_drop(v)
             drop_sum = sum(drops)
 
-            # Enable loss logic only after 1s
             loss_enabled = elapsed >= LINE_LOSS_ENABLE_TIME
             lost = loss_enabled and interp.line_lost(drop_sum)
 
@@ -176,7 +172,7 @@ if __name__ == "__main__":
                 sleep(STOP_BEFORE_REVERSE)
 
                 px.set_dir_servo_angle(0)
-                px.backward(REVERSE_SPEED)
+                px.backward(15)     # <<< CHANGED
                 sleep(0.5)
 
                 px.stop()
@@ -190,7 +186,7 @@ if __name__ == "__main__":
             steer = ctrl.step(err)
 
             px.set_dir_servo_angle(steer)
-            px.forward(FORWARD_SPEED)
+            px.forward(15)          # <<< CHANGED
 
             print(
                 f"TRACK | adc={[round(x) for x in v]} | "
