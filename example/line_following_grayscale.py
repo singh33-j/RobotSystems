@@ -17,7 +17,7 @@ EDGE_ASYM_THRESH  = 0.10        # must be directional
 CONTROL_DT = 0.01
 
 
-=
+
 #Sensing
 class LineSensor:
     def __init__(self, pins=['A0','A1','A2']):
