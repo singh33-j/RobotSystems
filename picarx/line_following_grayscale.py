@@ -100,7 +100,7 @@ class LineInterpreter:
 # ============================================================
 
 class PDController:
-    def __init__(self, Kp=18.0, Kd=4.0, max_angle=MAX_STEER_DEG):
+    def __init__(self, Kp=10.0, Kd=2.0, max_angle=MAX_STEER_DEG):
         self.Kp = Kp
         self.Kd = Kd
         self.max = max_angle
