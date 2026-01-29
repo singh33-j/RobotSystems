@@ -24,7 +24,7 @@ DROP_SUM_THRESH = 600
 ERROR_GAIN         = 8.0
 ERROR_DEADZONE     = 0.05
 STEER_DEADZONE_DEG = 1.5
-MAX_STEER_DEG      = 25.0
+MAX_STEER_DEG      = 30.0
 
 
 # ============================================================
