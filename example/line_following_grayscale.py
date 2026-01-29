@@ -151,7 +151,8 @@ if __name__ == "__main__":
 
                 # ---------------- CONFIRMED LINE LOSS ----------------
                 t_lost = time() - last_valid_time
-                reverse_time = min(t_lost, 1.0)
+                reverse_time = t_lost
+
 
                 px.stop()
                 px.set_dir_servo_angle(last_valid_steer)
