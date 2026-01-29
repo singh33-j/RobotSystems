@@ -12,7 +12,6 @@ except ImportError:
 # ============================================================
 
 FILTER_ALPHA = 0.7
-EDGE_THRESH  = 0.05
 CONTROL_DT   = 0.01
 
 STARTUP_STRAIGHT_TIME = 0.2
@@ -34,6 +33,7 @@ class LineSensor:
 
     def read(self):
         raw = [a.read() for a in self.adc]
+
         for i in range(3):
             self.filt[i] = (
                 FILTER_ALPHA * raw[i]
@@ -57,7 +57,7 @@ class LineSensor:
 
 
 # ============================================================
-# INTERPRETATION
+# INTERPRETATION (FIXED)
 # ============================================================
 
 class LineInterpreter:
@@ -65,23 +65,24 @@ class LineInterpreter:
         self.polarity = polarity
 
     def compute_error(self, v):
+        """
+        Robust, normalized center-of-mass style error.
+        Zero when centered, smooth, non-saturating.
+        """
         L, C, R = v
+        s = L + C + R
 
-        dLC = C - L
-        dCR = R - C
-
-        if self.polarity == 'light':
-            dLC = -dLC
-            dCR = -dCR
-        if max(abs(dLC), abs(dCR)) < EDGE_THRESH:
+        if s < 1e-6:
             return 0.0
 
-        if abs(dLC) > abs(dCR):
-            e = +dLC
-        else:
-            e = -dCR
+        # RIGHT positive, LEFT negative
+        e = (R - L) / s
 
-        return max(-1.0, min(1.0, 0.7 * e))
+        if self.polarity == 'light':
+            e = -e
+
+        # hard safety clamp (prevents lock-up)
+        return max(-0.6, min(0.6, e))
 
     def line_lost(self, drop_sum):
         return drop_sum > DROP_SUM_THRESH
@@ -92,11 +93,12 @@ class LineInterpreter:
 # ============================================================
 
 class PDController:
-    def __init__(self, Kp=25.0, Kd=2.0, max_angle=30.0):
+    def __init__(self, Kp=25.0, Kd=6.0, max_angle=25.0):
         self.Kp = Kp
         self.Kd = Kd
         self.max = max_angle
         self.e_last = 0.0
+        self.d_filt = 0.0
         self.t_last = time()
 
     def step(self, e):
@@ -104,8 +106,10 @@ class PDController:
         dt = max(now - self.t_last, 1e-4)
 
         de = (e - self.e_last) / dt
-        u  = self.Kp * e + self.Kd * de
-        u  = max(-self.max, min(self.max, u))
+        self.d_filt = 0.7 * self.d_filt + 0.3 * de
+
+        u = self.Kp * e + self.Kd * self.d_filt
+        u = max(-self.max, min(self.max, u))
 
         self.e_last = e
         self.t_last = now
@@ -113,6 +117,7 @@ class PDController:
 
     def reset(self):
         self.e_last = 0.0
+        self.d_filt = 0.0
         self.t_last = time()
 
 
@@ -132,16 +137,13 @@ if __name__ == "__main__":
     try:
         while True:
 
-            t_now = time()
-            elapsed = t_now - start_time
+            elapsed = time() - start_time
 
             # ---------------- STARTUP STRAIGHT ----------------
             if elapsed < STARTUP_STRAIGHT_TIME:
                 px.set_dir_servo_angle(0)
-                px.forward(20)      # <<< CHANGED
+                px.forward(20)
                 ctrl.reset()
-
-                print("STARTUP | line_lost=False | steer=0")
                 sleep(CONTROL_DT)
                 continue
             # --------------------------------------------------
@@ -156,18 +158,10 @@ if __name__ == "__main__":
             # ---------------- LINE LOST ----------------
             if lost:
                 px.stop()
-
-                print(
-                    f"REVERSE | adc={[round(x) for x in v]} | "
-                    f"drops={[round(d) for d in drops]} | "
-                    f"drop_sum={round(drop_sum)} | "
-                    f"line_lost=True"
-                )
-
                 sleep(STOP_BEFORE_REVERSE)
 
                 px.set_dir_servo_angle(0)
-                px.backward(20)     # <<< CHANGED
+                px.backward(20)
                 sleep(0.5)
 
                 px.stop()
@@ -181,15 +175,11 @@ if __name__ == "__main__":
             steer = ctrl.step(err)
 
             px.set_dir_servo_angle(steer)
-            px.forward(20)          # <<< CHANGED
+            px.forward(20)
 
             print(
                 f"TRACK | adc={[round(x) for x in v]} | "
-                f"drops={[round(d) for d in drops]} | "
-                f"drop_sum={round(drop_sum)} | "
-                f"line_lost={lost} | "
-                f"err={err:+.3f} | "
-                f"steer={steer:+.1f}"
+                f"err={err:+.3f} | steer={steer:+.1f}"
             )
 
             sleep(CONTROL_DT)
