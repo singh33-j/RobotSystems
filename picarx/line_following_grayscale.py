@@ -154,7 +154,7 @@ if __name__ == "__main__":
             # --------------------------------------------------
             if elapsed < STARTUP_STRAIGHT_TIME:
                 px.set_dir_servo_angle(0)
-                px.forward(22)
+                px.forward(28)
                 ctrl.reset()
                 sleep(CONTROL_DT)
                 continue
@@ -235,7 +235,7 @@ if __name__ == "__main__":
             last_steer = steer
 
             px.set_dir_servo_angle(steer)
-            px.forward(22)
+            px.forward(28)
 
             print(
                 f"TRACK | adc={[round(x) for x in v]} | "
