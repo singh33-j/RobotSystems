@@ -186,7 +186,7 @@ if __name__ == "__main__":
             steer = ctrl.step(err)
 
             px.set_dir_servo_angle(steer)
-            px.forward(15)          # <<< CHANGED
+            px.forward(30)          # <<< CHANGED
 
             print(
                 f"TRACK | adc={[round(x) for x in v]} | "
