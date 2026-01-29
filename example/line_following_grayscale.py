@@ -18,7 +18,7 @@ CONTROL_DT   = 0.01
 FORWARD_SPEED = 4
 REVERSE_SPEED = 3
 
-LOSS_CONFIRM_TIME = 1.0   # <<< REQUIRED: seconds without line
+LOSS_CONFIRM_TIME = .2   # <<< REQUIRED: seconds without line
 
 
 # ============================================================
