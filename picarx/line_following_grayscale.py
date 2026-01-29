@@ -86,7 +86,7 @@ class LineInterpreter:
         if abs(e) < ERROR_DEADZONE:
             e = 0.0
 
-        return e
+        return max(-1.0, min(1.0, e))
 
     def line_lost(self, drop_sum):
         return drop_sum > DROP_SUM_THRESH
@@ -100,7 +100,7 @@ class LineInterpreter:
 # ============================================================
 
 class PDController:
-    def __init__(self, Kp=20.0, Kd=1.5, max_angle=MAX_STEER_DEG):
+    def __init__(self, Kp=25.0, Kd=2, max_angle=MAX_STEER_DEG):
         self.Kp = Kp
         self.Kd = Kd
         self.max = max_angle
