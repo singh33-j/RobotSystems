@@ -1,4 +1,4 @@
-from time import sleep
+from time import sleep, time
 from picarx import Picarx
 
 try:
@@ -8,17 +8,20 @@ except ImportError:
 
 
 # ============================================================
-# CONFIGURATION
+# CONFIG
 # ============================================================
 
-FILTER_ALPHA   = 0.7
 CONTROL_DT     = 0.01
 
-FORWARD_SPEED  = 14
-REVERSE_SPEED  = 14
+FORWARD_SPEED  = 4
+REVERSE_SPEED  = 3
 
-DROP_THRESHOLD = 600   # sum of brightness drops
-STOP_TIME      = 1.0   # seconds to stop before reversing
+STEER_MAX      = 25.0
+KP             = 18.0
+
+DROP_THRESHOLD = 600        # sum of brightness drops
+SPREAD_THRESH  = 150        # minimum structure to steer
+STOP_TIME     = 1.0         # pause before reverse
 
 
 # ============================================================
@@ -26,30 +29,20 @@ STOP_TIME      = 1.0   # seconds to stop before reversing
 # ============================================================
 
 class LineSensor:
-    def __init__(self, pins=['A0','A1','A2']):
+    def __init__(self, pins=('A0','A1','A2')):
         self.adc = [ADC(p) for p in pins]
-        self.filt = [0.0, 0.0, 0.0]
-        self.prev = None
+        self.last = None
 
     def read(self):
-        raw = [a.read() for a in self.adc]
+        v = [a.read() for a in self.adc]
 
-        for i in range(3):
-            self.filt[i] = (
-                FILTER_ALPHA * raw[i]
-                + (1 - FILTER_ALPHA) * self.filt[i]
-            )
-
-        if self.prev is None:
+        if self.last is None:
             drops = [0, 0, 0]
         else:
-            drops = [
-                max(0, self.prev[i] - self.filt[i])
-                for i in range(3)
-            ]
+            drops = [max(0, self.last[i] - v[i]) for i in range(3)]
 
-        self.prev = self.filt.copy()
-        return self.filt.copy(), drops
+        self.last = v.copy()
+        return v, drops
 
 
 # ============================================================
@@ -57,77 +50,80 @@ class LineSensor:
 # ============================================================
 
 class LineInterpreter:
-    def compute_error(self, v):
+    def compute(self, v, drops):
         L, C, R = v
-        denom = abs(L - R) + 1e-6
-        return (L - R) / denom
+
+        # ---------- LINE LOSS (brightness drop) ----------
+        drop_sum = sum(drops)
+        line_lost = drop_sum >= DROP_THRESHOLD
+
+        # ---------- STRUCTURE CHECK (no edge → no steering) ----------
+        spread = max(v) - min(v)
+        if spread < SPREAD_THRESH:
+            err = 0.0
+        else:
+            err = (L - R) / spread
+            err = max(-1.0, min(1.0, err))
+
+        return err, line_lost, drop_sum
 
 
 # ============================================================
-# MAIN
+# CONTROLLER
+# ============================================================
+
+class SteeringController:
+    def step(self, err):
+        steer = KP * err
+        steer = max(-STEER_MAX, min(STEER_MAX, steer))
+        return steer
+
+
+# ============================================================
+# MAIN LOOP
 # ============================================================
 
 if __name__ == "__main__":
 
-    px = Picarx()
+    px      = Picarx()
     sensor = LineSensor()
     interp = LineInterpreter()
-
-    last_steer = 0.0
-    reversing = False
+    ctrl   = SteeringController()
 
     try:
         while True:
-
             adc, drops = sensor.read()
-            drop_sum = sum(drops)
-            line_lost = drop_sum >= DROP_THRESHOLD
+            err, line_lost, drop_sum = interp.compute(adc, drops)
 
             if line_lost:
-                # ---------- STOP ----------
-                px.stop()
-
                 print(
-                    f"STOP | adc={[int(x) for x in adc]} "
-                    f"| drops={[int(d) for d in drops]} "
-                    f"| drop_sum={int(drop_sum)} "
-                    f"| line_lost={line_lost}"
+                    f"REVERSE | adc={adc} | drops={drops} | "
+                    f"drop_sum={drop_sum} | line_lost=True"
                 )
 
+                px.stop()
                 sleep(STOP_TIME)
 
-                # ---------- REVERSE ----------
-                px.set_dir_servo_angle(last_steer)
                 px.backward(REVERSE_SPEED)
+                sleep(0.4)
 
-                print(
-                    f"REVERSE | steer={last_steer:+.1f}"
-                )
-
-                sleep(CONTROL_DT)
+                px.stop()
+                sleep(0.1)
                 continue
 
-            # ---------- NORMAL TRACKING ----------
-            err = interp.compute_error(adc)
-            steer = max(-30.0, min(30.0, 25.0 * err))
+            steer = ctrl.step(err)
 
             px.set_dir_servo_angle(steer)
             px.forward(FORWARD_SPEED)
 
-            last_steer = steer
-
             print(
-                f"TRACK | adc={[int(x) for x in adc]} "
-                f"| drops={[int(d) for d in drops]} "
-                f"| drop_sum={int(drop_sum)} "
-                f"| line_lost={line_lost} "
-                f"| err={err:+.3f} "
-                f"| steer={steer:+.1f}"
+                f"TRACK | adc={adc} | drops={drops} | "
+                f"drop_sum={drop_sum} | line_lost=False | "
+                f"err={err:+.3f} | steer={steer:+.1f}"
             )
 
             sleep(CONTROL_DT)
 
     except KeyboardInterrupt:
-        print("\nStopping")
+        print("\nStopping...")
         px.stop()
-        sleep(0.1)
