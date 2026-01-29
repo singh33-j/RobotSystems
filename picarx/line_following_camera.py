@@ -15,7 +15,7 @@ FRAME_HEIGHT = 240
 ROI_Y_START = 160     # bottom third
 ROI_HEIGHT  = 80
 
-THRESH_VAL = 120      # fixed since lighting is constant
+THRESH_VAL = 80      # fixed since lighting is constant
 
 MAX_STEER_DEG = 30.0
 STEER_GAIN = 0.15     # pixels -> degrees
