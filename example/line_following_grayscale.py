@@ -11,38 +11,32 @@ except ImportError:
 # CONFIG
 # ============================================================
 
-CONTROL_DT     = 0.01
+FILTER_ALPHA = 0.7
+EDGE_THRESH  = 0.05
+CONTROL_DT   = 0.01
 
-FORWARD_SPEED  = 4
-REVERSE_SPEED  = 3
+FORWARD_SPEED = 4
 
-STEER_MAX      = 25.0
-KP             = 18.0
-
-DROP_THRESHOLD = 600        # sum of brightness drops
-SPREAD_THRESH  = 150        # minimum structure to steer
-STOP_TIME     = 1.0         # pause before reverse
+STARTUP_STRAIGHT_TIME = 0.2   # <<< THIS IS THE FIX
 
 
 # ============================================================
-# SENSOR
+# SENSING
 # ============================================================
 
 class LineSensor:
-    def __init__(self, pins=('A0','A1','A2')):
+    def __init__(self, pins=['A0','A1','A2']):
         self.adc = [ADC(p) for p in pins]
-        self.last = None
+        self.filt = [0.0, 0.0, 0.0]
 
     def read(self):
-        v = [a.read() for a in self.adc]
-
-        if self.last is None:
-            drops = [0, 0, 0]
-        else:
-            drops = [max(0, self.last[i] - v[i]) for i in range(3)]
-
-        self.last = v.copy()
-        return v, drops
+        raw = [a.read() for a in self.adc]
+        for i in range(3):
+            self.filt[i] = (
+                FILTER_ALPHA * raw[i]
+                + (1 - FILTER_ALPHA) * self.filt[i]
+            )
+        return self.filt.copy()
 
 
 # ============================================================
@@ -50,80 +44,102 @@ class LineSensor:
 # ============================================================
 
 class LineInterpreter:
-    def compute(self, v, drops):
+    def __init__(self, polarity='dark'):
+        self.polarity = polarity
+
+    def compute_error(self, v):
         L, C, R = v
 
-        # ---------- LINE LOSS (brightness drop) ----------
-        drop_sum = sum(drops)
-        line_lost = drop_sum >= DROP_THRESHOLD
+        dLC = C - L
+        dCR = R - C
 
-        # ---------- STRUCTURE CHECK (no edge → no steering) ----------
-        spread = max(v) - min(v)
-        if spread < SPREAD_THRESH:
-            err = 0.0
+        if self.polarity == 'light':
+            dLC = -dLC
+            dCR = -dCR
+
+        contrast = abs(L - C) + abs(C - R) + 1e-6
+        dLC /= contrast
+        dCR /= contrast
+
+        if max(abs(dLC), abs(dCR)) < EDGE_THRESH:
+            return 0.0
+
+        if abs(dLC) > abs(dCR):
+            return max(-1.0, min(1.0, 0.7 * dLC))
         else:
-            err = (L - R) / spread
-            err = max(-1.0, min(1.0, err))
-
-        return err, line_lost, drop_sum
+            return max(-1.0, min(1.0, -0.7 * dCR))
 
 
 # ============================================================
-# CONTROLLER
+# PD CONTROLLER
 # ============================================================
 
-class SteeringController:
-    def step(self, err):
-        steer = KP * err
-        steer = max(-STEER_MAX, min(STEER_MAX, steer))
-        return steer
+class PDController:
+    def __init__(self, Kp=14.0, Kd=2.0, max_angle=30.0):
+        self.Kp = Kp
+        self.Kd = Kd
+        self.max = max_angle
+        self.e_last = 0.0
+        self.t_last = time()
+
+    def step(self, e):
+        now = time()
+        dt = max(now - self.t_last, 1e-4)
+
+        de = (e - self.e_last) / dt
+        u  = self.Kp * e + self.Kd * de
+        u  = max(-self.max, min(self.max, u))
+
+        self.e_last = e
+        self.t_last = now
+        return u
+
+    def reset(self):
+        self.e_last = 0.0
+        self.t_last = time()
 
 
 # ============================================================
-# MAIN LOOP
+# MAIN
 # ============================================================
 
 if __name__ == "__main__":
 
-    px      = Picarx()
+    px     = Picarx()
     sensor = LineSensor()
     interp = LineInterpreter()
-    ctrl   = SteeringController()
+    ctrl   = PDController()
+
+    start_time = time()
 
     try:
         while True:
-            adc, drops = sensor.read()
-            err, line_lost, drop_sum = interp.compute(adc, drops)
 
-            if line_lost:
-                print(
-                    f"REVERSE | adc={adc} | drops={drops} | "
-                    f"drop_sum={drop_sum} | line_lost=True"
-                )
+            # ---------------- STARTUP STRAIGHT ----------------
+            if time() - start_time < STARTUP_STRAIGHT_TIME:
+                px.set_dir_servo_angle(0)
+                px.forward(FORWARD_SPEED)
+                ctrl.reset()
 
-                px.stop()
-                sleep(STOP_TIME)
-
-                px.backward(REVERSE_SPEED)
-                sleep(0.4)
-
-                px.stop()
-                sleep(0.1)
+                print("STARTUP | steering=0")
+                sleep(CONTROL_DT)
                 continue
+            # --------------------------------------------------
 
+            v   = sensor.read()
+            err = interp.compute_error(v)
             steer = ctrl.step(err)
 
             px.set_dir_servo_angle(steer)
             px.forward(FORWARD_SPEED)
 
             print(
-                f"TRACK | adc={adc} | drops={drops} | "
-                f"drop_sum={drop_sum} | line_lost=False | "
+                f"TRACK | adc={[round(x) for x in v]} | "
                 f"err={err:+.3f} | steer={steer:+.1f}"
             )
 
             sleep(CONTROL_DT)
 
     except KeyboardInterrupt:
-        print("\nStopping...")
         px.stop()
+        sleep(0.1)
