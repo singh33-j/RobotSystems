@@ -21,10 +21,10 @@ STOP_BEFORE_REVERSE   = 1.0
 DROP_SUM_THRESH = 600
 
 # --- Steering shaping ---
-ERROR_GAIN        = 8.0      # amplify small sensor differences
-ERROR_DEADZONE    = 0.05     # ignore tiny noise
-STEER_DEADZONE_DEG = 1.5     # servo cannot respond below this
-MAX_STEER_DEG     = 25.0
+ERROR_GAIN         = 8.0
+ERROR_DEADZONE     = 0.05
+STEER_DEADZONE_DEG = 1.5
+MAX_STEER_DEG      = 25.0
 
 
 # ============================================================
@@ -58,7 +58,7 @@ class LineSensor:
 
 
 # ============================================================
-# INTERPRETATION (FIXED + AMPLIFIED)
+# INTERPRETATION
 # ============================================================
 
 class LineInterpreter:
@@ -66,22 +66,15 @@ class LineInterpreter:
         self.polarity = polarity
 
     def compute_error(self, v):
-        """
-        Center-dominant, amplified error.
-        Robust near center and physically meaningful.
-        """
         L, C, R = v
-
         denom = abs(L - C) + abs(R - C) + 1e-6
         e = (R - L) / denom
 
         if self.polarity == 'light':
             e = -e
 
-        # amplify small errors
         e *= ERROR_GAIN
 
-        # noise deadzone
         if abs(e) < ERROR_DEADZONE:
             e = 0.0
 
@@ -136,6 +129,7 @@ if __name__ == "__main__":
     ctrl   = PDController()
 
     start_time = time()
+    last_steer = 0.0   # <<< STORE LAST VALID STEERING
 
     try:
         while True:
@@ -147,6 +141,7 @@ if __name__ == "__main__":
                 px.set_dir_servo_angle(0)
                 px.forward(20)
                 ctrl.reset()
+                last_steer = 0.0
                 sleep(CONTROL_DT)
                 continue
             # --------------------------------------------------
@@ -163,7 +158,8 @@ if __name__ == "__main__":
                 px.stop()
                 sleep(STOP_BEFORE_REVERSE)
 
-                px.set_dir_servo_angle(0)
+                # 🔑 KEY CHANGE: reverse with last steering angle
+                px.set_dir_servo_angle(last_steer)
                 px.backward(20)
                 sleep(0.5)
 
@@ -180,6 +176,9 @@ if __name__ == "__main__":
             # enforce physical steering limits
             if abs(steer) < STEER_DEADZONE_DEG:
                 steer = 0.0
+
+            # remember last valid steering command
+            last_steer = steer
 
             px.set_dir_servo_angle(steer)
             px.forward(20)
