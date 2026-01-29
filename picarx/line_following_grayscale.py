@@ -17,7 +17,7 @@ CONTROL_DT   = 0.01
 STARTUP_STRAIGHT_TIME = 0.2
 LINE_LOSS_ENABLE_TIME = 1.0
 
-DROP_SUM_THRESH     = 200
+DROP_SUM_THRESH     = 400
 REACQUIRE_THRESH    = 100     # <<< hysteresis lower bound
 REACQUIRE_COUNT_REQ = 5       # <<< consecutive samples
 
