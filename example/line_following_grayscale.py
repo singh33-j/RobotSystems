@@ -9,134 +9,114 @@ px = Picarx()
 # -----------------------------
 # Tunable parameters
 # -----------------------------
-BASE_SPEED        = 12          # forward speed
-REVERSE_SPEED     = -10         # reverse speed
-KP_STEER          = 35          # proportional steering gain (deg per error)
-MAX_STEER         = 30          # steering limit (deg)
+BASE_SPEED        = 12
+REVERSE_SPEED     = -10
+KP_STEER          = 35
+MAX_STEER         = 30
 
-LINE_LOST_TIME    = 0.5         # seconds line must be gone before recovery
-BRIGHTNESS_JUMP   = 700         # brightness range threshold for "off line"
-ASYM_THRESHOLD    = 60          # min L/R diff to consider valid asymmetry
+LINE_LOST_TIME    = 0.5          # seconds
+BRIGHTNESS_JUMP   = 600          # per-sensor threshold
 
-CONTROL_DT        = 0.05        # loop period (s)
+CONTROL_DT        = 0.05
 
 # -----------------------------
-# State variables
+# States
 # -----------------------------
-STATE_TRACKING   = "TRACKING"
-STATE_LOST_WAIT  = "LOST_WAIT"
-STATE_RECOVERING = "RECOVERING"
+TRACKING   = "TRACKING"
+LOST_WAIT  = "LOST_WAIT"
+RECOVERING = "RECOVERING"
 
-state = STATE_TRACKING
+state = TRACKING
 
-lost_start_time   = None
-recover_start_time = None
-
-last_valid_steer  = 0.0
-last_seen_time    = time.time()
+lost_start_time = None
+last_valid_steer = 0.0
+last_good_adc = None
 
 # -----------------------------
 # Helper functions
 # -----------------------------
-def read_grayscale():
-    return px.get_grayscale_data()
+def clamp(x, lo, hi):
+    return max(lo, min(hi, x))
 
-def clamp(val, lo, hi):
-    return max(lo, min(hi, val))
-
-def brightness_range(v):
-    return max(v) - min(v)
-
-def compute_error(v):
-    """
-    Normalized weighted error:
-      left  -> -1
-      mid   ->  0
-      right -> +1
-    """
-    left, mid, right = v
-    total = left + mid + right
-    if total < 1e-6:
+def compute_error(adc):
+    left, mid, right = adc
+    s = left + mid + right
+    if s < 1e-6:
         return 0.0
+    return (-left + right) / s
 
-    pos = (-1 * left + 0 * mid + 1 * right) / total
-    return pos
-
-def asymmetry(v):
-    return abs(v[0] - v[2])
+def all_sensors_jumped(adc, ref):
+    return all(abs(a - r) > BRIGHTNESS_JUMP for a, r in zip(adc, ref))
 
 # -----------------------------
-# Main control loop
+# Main loop
 # -----------------------------
-print("Starting line following with recovery...")
+print("Line following with 3-sensor brightness loss detection")
 time.sleep(1)
 
 try:
     while True:
-        t_now = time.time()
-        adc = read_grayscale()
+        now = time.time()
+        adc = px.get_grayscale_data()
 
-        bright_rng = brightness_range(adc)
-        asym = asymmetry(adc)
+        # Initialize reference
+        if last_good_adc is None:
+            last_good_adc = adc[:]
 
-        # -----------------------------
-        # TRACKING STATE
-        # -----------------------------
-        if state == STATE_TRACKING:
+        jumped_all = all_sensors_jumped(adc, last_good_adc)
 
-            # Detect possible line loss
-            if bright_rng > BRIGHTNESS_JUMP:
-                state = STATE_LOST_WAIT
-                lost_start_time = t_now
+        # -------------------------------------------------
+        # TRACKING
+        # -------------------------------------------------
+        if state == TRACKING:
 
-                px.set_motor_speed(0, 0)
-                print("→ LOST_WAIT (brightness jump)", adc)
+            if jumped_all:
+                state = LOST_WAIT
+                lost_start_time = now
+                px.stop()
+
+                print("→ LOST_WAIT (3-sensor brightness jump)", adc)
 
             else:
-                # Normal tracking
                 err = compute_error(adc)
-                steer = KP_STEER * err
-                steer = clamp(steer, -MAX_STEER, MAX_STEER)
+                steer = clamp(KP_STEER * err, -MAX_STEER, MAX_STEER)
 
                 px.set_dir_servo_angle(steer)
                 px.forward(BASE_SPEED)
 
                 last_valid_steer = steer
-                last_seen_time = t_now
+                last_good_adc = adc[:]   # update reference only when tracking
 
                 print(f"TRACK | adc={adc} | err={err:+.3f} | steer={steer:+.1f}")
 
-        # -----------------------------
-        # LOST WAIT (debounce)
-        # -----------------------------
-        elif state == STATE_LOST_WAIT:
+        # -------------------------------------------------
+        # LOST_WAIT (debounce)
+        # -------------------------------------------------
+        elif state == LOST_WAIT:
 
-            # Line reappeared → return to tracking
-            if bright_rng <= BRIGHTNESS_JUMP:
-                state = STATE_TRACKING
-                print("← recovered quickly, back to TRACKING")
+            if not jumped_all:
+                state = TRACKING
+                last_good_adc = adc[:]
+                print("← false alarm, back to TRACKING")
 
-            # Line gone long enough → recover
-            elif t_now - lost_start_time >= LINE_LOST_TIME:
-                state = STATE_RECOVERING
-                recover_start_time = t_now
-
+            elif now - lost_start_time >= LINE_LOST_TIME:
+                state = RECOVERING
                 px.set_dir_servo_angle(last_valid_steer)
                 px.backward(abs(REVERSE_SPEED))
 
-                print("→ RECOVERING (reverse)")
+                print("→ RECOVERING")
 
             else:
-                px.set_motor_speed(0, 0)
+                px.stop()
 
-        # -----------------------------
-        # RECOVERY STATE
-        # -----------------------------
-        elif state == STATE_RECOVERING:
+        # -------------------------------------------------
+        # RECOVERING
+        # -------------------------------------------------
+        elif state == RECOVERING:
 
-            # If contrast normal again → resume tracking
-            if bright_rng <= BRIGHTNESS_JUMP and asym > ASYM_THRESHOLD:
-                state = STATE_TRACKING
+            if not jumped_all:
+                state = TRACKING
+                last_good_adc = adc[:]
                 print("← line reacquired, TRACKING")
 
             else:
@@ -148,5 +128,5 @@ try:
         time.sleep(CONTROL_DT)
 
 except KeyboardInterrupt:
-    print("\nStopping robot.")
     px.stop()
+    print("\nStopped.")
