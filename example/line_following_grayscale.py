@@ -15,8 +15,11 @@ FILTER_ALPHA = 0.7
 EDGE_THRESH  = 0.05
 CONTROL_DT  = 0.01
 
-FORWARD_SPEED = 4          # slow for curves
-REVERSE_SPEED = 3          # slightly slower reverse
+FORWARD_SPEED = 4
+REVERSE_SPEED = 3
+
+LINE_LOST_DELAY = 0.5     # <<< only reverse if lost > 0.5 s
+MAX_REVERSE_TIME = 1.0    # safety cap (can remove later)
 
 
 # ============================================================
@@ -61,16 +64,17 @@ class LineInterpreter:
         dCR /= contrast
 
         if max(abs(dLC), abs(dCR)) < EDGE_THRESH:
-            return None   # <<< explicitly say "no line"
+            return None   # no reliable line
 
         if abs(dLC) > abs(dCR):
-            e = +dLC
+            e = +dLC     # line on left → steer right
         else:
-            e = -dCR
+            e = -dCR     # line on right → steer left
 
         return max(-1.0, min(1.0, 0.7 * e))
 
     def line_lost(self, v):
+        # contrast collapse test
         return max(v) - min(v) < 20
 
 
@@ -122,13 +126,23 @@ if __name__ == "__main__":
         while True:
             v = sensor.read()
             err = interp.compute_error(v)
+            now = time()
 
-            # ---------- LINE LOST ----------
+            # ---------- LINE LOST OR UNCERTAIN ----------
             if err is None or interp.line_lost(v):
 
-                # compute distance-equivalent reverse time
-                t_lost = time() - last_valid_time
-                reverse_time = min(t_lost, 1.0)  # safety cap
+                t_lost = now - last_valid_time
+
+                # Ignore brief losses
+                if t_lost < LINE_LOST_DELAY:
+                    px.forward(FORWARD_SPEED)
+                    sleep(CONTROL_DT)
+                    continue
+
+                # True loss → reverse
+                reverse_time = min(t_lost, MAX_REVERSE_TIME)
+
+                print(f"LINE LOST {t_lost:.2f}s → reversing {reverse_time:.2f}s")
 
                 px.stop()
                 px.set_dir_servo_angle(last_valid_steer)
@@ -141,14 +155,13 @@ if __name__ == "__main__":
                 sleep(0.05)
                 continue
 
-            # ---------- NORMAL OPERATION ----------
+            # ---------- NORMAL TRACKING ----------
             steer = ctrl.step(err)
 
             px.set_dir_servo_angle(steer)
             px.forward(FORWARD_SPEED)
 
-            # remember last valid state
-            last_valid_time  = time()
+            last_valid_time  = now
             last_valid_steer = steer
 
             print(
