@@ -17,8 +17,8 @@ CONTROL_DT   = 0.01
 FORWARD_SPEED = 4
 REVERSE_SPEED = 3
 
-DROP_THRESH   = 300     # sudden brightness drop per sensor
-LOSS_TIME     = 0.5     # seconds drop must persist
+DROP_THRESH   = 300     # brightness drop per sensor
+LOSS_TIME     = 0.5     # seconds before reversing
 
 
 # ============================================================
@@ -43,8 +43,7 @@ class LineSensor:
 
 class LineInterpreter:
     def compute_error(self, v):
-        L, C, R = v
-        # simple left-right imbalance
+        L, _, R = v
         err = (R - L) / (abs(L) + abs(R) + 1e-6)
         return max(-1.0, min(1.0, err))
 
@@ -99,9 +98,7 @@ if __name__ == "__main__":
             # ----------------------------------
             # BRIGHTNESS DROP DETECTION
             # ----------------------------------
-            drops = [
-                prev_adc[i] - adc[i] for i in range(3)
-            ]
+            drops = [prev_adc[i] - adc[i] for i in range(3)]
 
             drop_detected = all(d > DROP_THRESH for d in drops)
 
@@ -109,29 +106,32 @@ if __name__ == "__main__":
                 if loss_start is None:
                     loss_start = time()
 
-                lost_for = time() - loss_start
-
-                if lost_for >= LOSS_TIME:
-                    reverse_time = time() - last_seen_time
-
-                    px.stop()
-                    px.set_dir_servo_angle(last_steer)
-
-                    px.backward(REVERSE_SPEED)
-                    sleep(reverse_time)
-
-                    px.stop()
-                    ctrl.reset()
-
-                    # reset state
-                    loss_start = None
-                    prev_adc   = adc
-                    sleep(0.05)
-                    continue
-
+                lost_duration = time() - loss_start
+                line_lost = True
             else:
                 loss_start = None
                 last_seen_time = time()
+                line_lost = False
+
+            # ----------------------------------
+            # REVERSAL
+            # ----------------------------------
+            if line_lost and lost_duration >= LOSS_TIME:
+                reverse_time = time() - last_seen_time
+
+                px.stop()
+                px.set_dir_servo_angle(last_steer)
+
+                px.backward(REVERSE_SPEED)
+                sleep(reverse_time)
+
+                px.stop()
+                ctrl.reset()
+
+                prev_adc   = adc
+                loss_start = None
+                sleep(0.05)
+                continue
 
             # ----------------------------------
             # NORMAL TRACKING
@@ -148,6 +148,7 @@ if __name__ == "__main__":
             print(
                 f"TRACK | adc={[int(x) for x in adc]} | "
                 f"drops={[int(d) for d in drops]} | "
+                f"line_lost={line_lost} | "
                 f"steer={steer:+.1f}"
             )
 
