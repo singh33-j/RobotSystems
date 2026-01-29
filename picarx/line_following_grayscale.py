@@ -143,7 +143,7 @@ if __name__ == "__main__":
             # ---------------- STARTUP STRAIGHT ----------------
             if elapsed < STARTUP_STRAIGHT_TIME:
                 px.set_dir_servo_angle(0)
-                px.forward(15)      # <<< CHANGED
+                px.forward(30)      # <<< CHANGED
                 ctrl.reset()
 
                 print("STARTUP | line_lost=False | steer=0")
@@ -172,7 +172,7 @@ if __name__ == "__main__":
                 sleep(STOP_BEFORE_REVERSE)
 
                 px.set_dir_servo_angle(0)
-                px.backward(15)     # <<< CHANGED
+                px.backward(30)     # <<< CHANGED
                 sleep(0.5)
 
                 px.stop()
