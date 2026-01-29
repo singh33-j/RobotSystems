@@ -13,7 +13,7 @@ except ImportError:
 REFERENCE = [1400, 1400, 1400]   # required by assignment
 FILTER_ALPHA = 0.7              # sensor low-pass filter
 
-EDGE_MAG_THRESH  = 0.1       # minimum detectable edge
+EDGE_MAG_THRESH  = 0.05       # minimum detectable edge
 CONTROL_DT = 0.01
 
 # Motion
