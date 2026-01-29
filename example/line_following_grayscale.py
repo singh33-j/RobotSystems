@@ -12,14 +12,13 @@ except ImportError:
 # ============================================================
 
 FILTER_ALPHA = 0.7
-CONTROL_DT   = 0.005
+CONTROL_DT = 0.01
 
 FORWARD_SPEED = 4
 REVERSE_SPEED = 3
 
-# Line-loss detection
-DROP_THRESH   = 100      # brightness drop per sensor
-LOSS_TIME_REQ = 0.2      # seconds line must be lost
+DROP_THRESH = 250        # brightness drop per sensor to trigger loss
+LOSS_DELAY  = 0.5        # seconds before reversing
 
 
 # ============================================================
@@ -28,7 +27,7 @@ LOSS_TIME_REQ = 0.2      # seconds line must be lost
 
 class LineSensor:
     def __init__(self, pins=['A0','A1','A2']):
-        self.adc  = [ADC(p) for p in pins]
+        self.adc = [ADC(p) for p in pins]
         self.filt = [0.0, 0.0, 0.0]
 
     def read(self):
@@ -42,25 +41,26 @@ class LineSensor:
 
 
 # ============================================================
-# ERROR COMPUTATION (simple edge steering)
+# EDGE-BASED INTERPRETER (USED ONLY WHEN LINE IS VALID)
 # ============================================================
 
 class LineInterpreter:
+    def __init__(self, polarity='dark'):
+        self.polarity = polarity
+
     def compute_error(self, v):
         L, C, R = v
 
         dLC = C - L
         dCR = R - C
 
-        if abs(dLC) < 1e-6 and abs(dCR) < 1e-6:
-            return 0.0
+        if self.polarity == 'light':
+            dLC = -dLC
+            dCR = -dCR
 
-        if abs(dLC) > abs(dCR):
-            e = +dLC
-        else:
-            e = -dCR
+        contrast = abs(dLC) + abs(dCR) + 1e-6
+        e = (dLC - dCR) / contrast
 
-        e /= (abs(L) + abs(C) + abs(R) + 1e-6)
         return max(-1.0, min(1.0, 0.7 * e))
 
 
@@ -81,8 +81,9 @@ class PDController:
         dt = max(now - self.t_last, 1e-4)
 
         de = (e - self.e_last) / dt
-        u  = self.Kp * e + self.Kd * de
-        u  = max(-self.max, min(self.max, u))
+        u = self.Kp * e + self.Kd * de
+
+        u = max(-self.max, min(self.max, u))
 
         self.e_last = e
         self.t_last = now
@@ -99,67 +100,71 @@ class PDController:
 
 if __name__ == "__main__":
 
-    px     = Picarx()
+    px = Picarx()
     sensor = LineSensor()
-    interp = LineInterpreter()
+    interp = LineInterpreter(polarity='dark')
     ctrl   = PDController()
 
-    prev_v = sensor.read()
+    prev_adc = None
 
-    loss_start = None
-    last_steer = 0.0
+    last_valid_steer = 0.0
+
+    loss_start_time = None
 
     try:
         while True:
-            v = sensor.read()
+            now = time()
+            adc = sensor.read()
 
-            # --- Brightness drop detection ---
-            drops = [prev_v[i] - v[i] for i in range(3)]
-            line_lost = all(d > DROP_THRESH for d in drops)
+            # ---------- BRIGHTNESS DROP DETECTION ----------
+            drops = [0, 0, 0]
+            if prev_adc is not None:
+                drops = [max(0, prev_adc[i] - adc[i]) for i in range(3)]
 
-            # --- Track loss timing ---
-            if line_lost:
-                if loss_start is None:
-                    loss_start = time()
+            big_drop = all(d > DROP_THRESH for d in drops)
+
+            # ---------- LOSS TIMING (LATCHED) ----------
+            if big_drop:
+                if loss_start_time is None:
+                    loss_start_time = now
             else:
-                loss_start = None
+                loss_start_time = None
 
-            loss_time = (time() - loss_start) if loss_start else 0.0
+            loss_time = 0.0
+            if loss_start_time is not None:
+                loss_time = now - loss_start_time
 
-            # =============================
-            # LINE LOST → REVERSE
-            # =============================
-            if loss_time >= LOSS_TIME_REQ:
+            line_lost = loss_time >= LOSS_DELAY
+
+            # ---------- LINE LOST → REVERSE ----------
+            if line_lost:
                 px.stop()
-                px.set_dir_servo_angle(last_steer)
-
+                px.set_dir_servo_angle(last_valid_steer)
                 px.backward(REVERSE_SPEED)
-                sleep(loss_time)   # reverse same duration as loss
-
+                sleep(loss_time)
                 px.stop()
                 ctrl.reset()
-                loss_start = None
-                sleep(0.05)
+                loss_start_time = None
+                prev_adc = None
                 continue
 
-            # =============================
-            # NORMAL TRACKING
-            # =============================
-            err   = interp.compute_error(v)
+            # ---------- NORMAL TRACKING ----------
+            err = interp.compute_error(adc)
             steer = ctrl.step(err)
 
             px.set_dir_servo_angle(steer)
             px.forward(FORWARD_SPEED)
 
-            last_steer = steer
-            prev_v     = v.copy()
+            last_valid_steer = steer
+            prev_adc = adc.copy()
 
+            # ---------- DEBUG ----------
             print(
-                f"TRACK | "
-                f"adc={[int(x) for x in v]} | "
+                f"TRACK | adc={[int(x) for x in adc]} | "
                 f"drops={[int(d) for d in drops]} | "
                 f"line_lost={line_lost} | "
                 f"loss_time={loss_time:.3f}s | "
+                f"err={err:+.3f} | "
                 f"steer={steer:+.1f}"
             )
 
