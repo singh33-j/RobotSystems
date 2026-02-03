@@ -102,15 +102,15 @@ class CameraLineFollower:
         # Centroid calculation
         cx = moments["m10"] / moments["m00"]
         center_x = w / 2
-        error_px = cx - center_x
+        error_norm = (cx - center_x)/center_x
 
         print(
             f"[CENTROID] cx={cx:.1f} | "
             f"center_x={center_x:.1f} | "
-            f"error_px={error_px:+.1f}"
+            f"error_norm={error_norm:+.1f}"
         )
 
-        return int(error_px)
+        return int(error_norm)
 
     def close(self):
         print("[CLEANUP] stopping camera")
@@ -148,7 +148,7 @@ if __name__ == "__main__":
                 continue
 
             # Proportional steering (no deadzone)
-            steer = STEER_GAIN * error_px
+            steer = STEER_GAIN * error_norm
             steer = max(-MAX_STEER_DEG, min(MAX_STEER_DEG, steer))
 
             print(
