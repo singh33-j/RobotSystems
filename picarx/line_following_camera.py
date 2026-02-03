@@ -19,7 +19,7 @@ ROI_HEIGHT  = 100
 THRESH_VAL = 120
 
 MAX_STEER_DEG = 30.0
-STEER_GAIN    = 0.5      # no deadzone
+STEER_GAIN    = 0.5      # UNCHANGED (as requested)
 
 FORWARD_SPEED = 28
 
@@ -61,7 +61,7 @@ class CameraLineFollower:
         # Convert to grayscale
         gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
 
-        # Region of Interest (EXACT SAME AS STREAM)
+        # Region of Interest
         roi = gray[
             ROI_Y_START : ROI_Y_START + ROI_HEIGHT,
             :
@@ -89,7 +89,7 @@ class CameraLineFollower:
             f"fill_ratio={fill_ratio:.4f}"
         )
 
-        # Reject weak detections (blank table / glare)
+        # Reject weak detections
         if white_px < 200:
             print("[REJECT] too few white pixels → no line")
             return None
@@ -101,16 +101,18 @@ class CameraLineFollower:
 
         # Centroid calculation
         cx = moments["m10"] / moments["m00"]
-        center_x = w / 2
-        error_norm = (cx - center_x)/center_x
+        center_x = w / 2.0
+
+        # 🔑 NORMALIZED ERROR (≈ -1 … +1)
+        error_norm = (cx - center_x) / center_x
 
         print(
             f"[CENTROID] cx={cx:.1f} | "
             f"center_x={center_x:.1f} | "
-            f"error_norm={error_norm:+.1f}"
+            f"error_norm={error_norm:+.3f}"
         )
 
-        return int(error_norm)
+        return error_norm
 
     def close(self):
         print("[CLEANUP] stopping camera")
@@ -128,7 +130,7 @@ if __name__ == "__main__":
     px = Picarx()
 
     # --- camera tilt (critical) ---
-    print("[INIT] setting camera tilt to -35 deg")
+    print("[INIT] setting camera tilt to -45 deg")
     px.set_cam_tilt_angle(-45)
     sleep(0.4)  # let servo settle
 
@@ -136,23 +138,23 @@ if __name__ == "__main__":
 
     try:
         while True:
-            error_px = follower.read_error()
+            error_norm = follower.read_error()
 
             # ------------------------------------------------
             # FAIL-SAFE: stop if vision is lost
             # ------------------------------------------------
-            if error_px is None:
+            if error_norm is None:
                 print("[SAFE] vision lost → STOP")
                 px.stop()
                 sleep(0.1)
                 continue
 
-            # Proportional steering (no deadzone)
+            # Proportional steering (normalized error)
             steer = STEER_GAIN * error_norm
             steer = max(-MAX_STEER_DEG, min(MAX_STEER_DEG, steer))
 
             print(
-                f"[CTRL] error_px={error_px:+d} | "
+                f"[CTRL] error_norm={error_norm:+.3f} | "
                 f"steer={steer:+.2f} deg | "
                 f"speed={FORWARD_SPEED}"
             )
