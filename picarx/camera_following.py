@@ -1,55 +1,71 @@
+# ============================================================
+# SAFE LINE FOLLOWING — PiCar-X + Picamera2 (HEADLESS)
+# ============================================================
+
 from picamera2 import Picamera2
+from picarx import Picarx
 import cv2
 import numpy as np
-from picarx import Picarx
 from time import sleep, time
 import signal
 import sys
+import atexit
 
 # ============================================================
-# PARAMETERS (TUNE THESE)
+# CONFIG
 # ============================================================
 FRAME_WIDTH  = 320
 FRAME_HEIGHT = 240
 
-BOTTOM_CROP_RATIO = 0.35        # Use bottom 35% of image
-THRESHOLD = 60                 # Black line threshold
+BOTTOM_CROP_RATIO = 0.35
+THRESHOLD = 60                 # black line on light floor
 STEERING_GAIN = 0.35
 BASE_SPEED = 25
-SLOW_SPEED = 15
+SLOW_SPEED = 12
 
 STEER_LIMIT = 30               # degrees
-PRINT_PERIOD = 0.5             # seconds
 
-MIN_WHITE_RATIO = 0.003        # camera pointing check
+PRINT_PERIOD = 0.5             # seconds
+HEADLESS = True                # MUST be True over SSH
+
+MIN_WHITE_RATIO = 0.003
 MAX_WHITE_RATIO = 0.25
 
 # ============================================================
-# INITIALIZE CAR
+# INIT CAR
 # ============================================================
 print("[INIT] Initializing PiCar-X")
 px = Picarx()
 px.set_dir_servo_angle(0)
 px.stop()
+sleep(0.2)
 
 # ============================================================
-# EMERGENCY STOP (Ctrl-C, kill, SSH drop)
+# HARD EMERGENCY STOP (MULTI-LAYER)
 # ============================================================
+def stop_all():
+    try:
+        px.set_dir_servo_angle(0)
+        px.stop()
+    except:
+        pass
+
 def emergency_stop(sig=None, frame=None):
-    print("\n[EMERGENCY] Stopping motors NOW")
-    px.set_dir_servo_angle(0)
-    px.stop()
-    sleep(0.1)
+    print(f"\n[EMERGENCY] Signal {sig} — stopping motors NOW")
+    stop_all()
     sys.exit(0)
 
+# Signal handlers
 signal.signal(signal.SIGINT, emergency_stop)
 signal.signal(signal.SIGTERM, emergency_stop)
 
+# Runs on ANY Python exit (including crashes)
+atexit.register(stop_all)
+
 # ============================================================
-# INITIALIZE CAMERA (Picamera2)
+# INIT CAMERA (Picamera2, no Qt)
 # ============================================================
 print("[INIT] Starting camera")
-
 picam2 = Picamera2()
 picam2.configure(
     picam2.create_video_configuration(
@@ -66,56 +82,50 @@ print("[INIT] Camera ready ✅")
 # MAIN LOOP
 # ============================================================
 last_print = time()
-print("[RUN] Line following started")
+print("[RUN] Line following active")
 
 try:
-    px.forward(BASE_SPEED)
-
     while True:
         frame = picam2.capture_array()
+
         if frame is None:
             print("[WARN] No camera frame → STOPPING")
-            px.stop()
+            stop_all()
+            sleep(0.05)
             continue
 
         # ----------------------------
-        # Convert to grayscale
+        # Vision pipeline
         # ----------------------------
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
         _, binary = cv2.threshold(
             gray, THRESHOLD, 255, cv2.THRESH_BINARY_INV
         )
 
-        # ----------------------------
-        # Crop bottom ROI
-        # ----------------------------
         h = binary.shape[0]
         crop_y = int(h * (1 - BOTTOM_CROP_RATIO))
         roi = binary[crop_y:h, :]
 
         # ----------------------------
-        # Camera orientation check
+        # Camera confidence check
         # ----------------------------
-        white_pixels = np.count_nonzero(roi)
-        white_ratio = white_pixels / roi.size
+        white_ratio = np.count_nonzero(roi) / roi.size
 
         now = time()
         do_print = (now - last_print) > PRINT_PERIOD
 
         if not (MIN_WHITE_RATIO < white_ratio < MAX_WHITE_RATIO):
-            px.set_dir_servo_angle(0)
-            px.stop()
+            stop_all()
 
             if do_print:
                 print(
-                    f"[CAMERA] No floor detected | white_ratio={white_ratio:.4f}"
+                    f"[CAMERA] Floor not visible | white_ratio={white_ratio:.4f}"
                 )
                 last_print = now
             continue
 
         # ----------------------------
-        # Centroid detection
+        # Line centroid
         # ----------------------------
         moments = cv2.moments(roi)
 
@@ -123,16 +133,16 @@ try:
             cx = int(moments["m10"] / moments["m00"])
             error = cx - (FRAME_WIDTH // 2)
 
-            steering = -STEERING_GAIN * error
-            steering = max(min(steering, STEER_LIMIT), -STEER_LIMIT)
+            steer = -STEERING_GAIN * error
+            steer = max(min(steer, STEER_LIMIT), -STEER_LIMIT)
 
-            px.set_dir_servo_angle(steering)
+            px.set_dir_servo_angle(steer)
             px.forward(BASE_SPEED)
 
             if do_print:
                 print(
                     f"[TRACK] cx={cx:3d} | err={error:4d} | "
-                    f"steer={steering:6.2f} | speed={BASE_SPEED}"
+                    f"steer={steer:6.2f} | speed={BASE_SPEED}"
                 )
                 last_print = now
 
@@ -141,32 +151,26 @@ try:
             px.forward(SLOW_SPEED)
 
             if do_print:
-                print("[LOST] Line lost → slow + straight")
+                print("[LOST] Line lost → slow")
                 last_print = now
 
         # ----------------------------
-        # Debug visualization
+        # GUI (DISABLED when headless)
         # ----------------------------
-        cv2.line(
-            roi,
-            (FRAME_WIDTH // 2, 0),
-            (FRAME_WIDTH // 2, roi.shape[0]),
-            128,
-            2
-        )
-        cv2.imshow("Binary ROI", roi)
-
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            print("[EXIT] 'q' pressed")
-            break
+        if not HEADLESS:
+            cv2.imshow("Binary ROI", roi)
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
 
 except KeyboardInterrupt:
     emergency_stop()
 
 finally:
     print("[SHUTDOWN] Cleaning up")
-    px.set_dir_servo_angle(0)
-    px.stop()
+    stop_all()
     picam2.stop()
-    cv2.destroyAllWindows()
+
+    if not HEADLESS:
+        cv2.destroyAllWindows()
+
     print("[SHUTDOWN] Done ✅")
