@@ -12,14 +12,15 @@ from picarx_improved import Picarx
 FRAME_WIDTH  = 320
 FRAME_HEIGHT = 240
 
-ROI_Y_START = 160
-ROI_HEIGHT  = 80
+# Slightly higher ROI for better anticipation
+ROI_Y_START = 120
+ROI_HEIGHT  = 120
 
 THRESH_VAL = 120
 
-MAX_STEER_DEG   = 30.0
-STEER_GAIN      = 0.15
-STEER_DEADZONE  = 2.0
+MAX_STEER_DEG = 30.0
+STEER_GAIN    = 0.3      # <-- increased gain
+# STEER_DEADZONE REMOVED
 
 FORWARD_SPEED = 28
 
@@ -35,13 +36,15 @@ class CameraLineFollower:
         self.picam2 = Picamera2()
         self.picam2.configure(
             self.picam2.create_preview_configuration(
-                main={"size": (FRAME_WIDTH, FRAME_HEIGHT),
-                      "format": "RGB888"}
+                main={
+                    "size": (FRAME_WIDTH, FRAME_HEIGHT),
+                    "format": "RGB888"
+                }
             )
         )
         self.picam2.start()
 
-        # camera warm-up
+        # Camera warm-up
         sleep(0.5)
 
         print("[INIT] camera started")
@@ -56,8 +59,10 @@ class CameraLineFollower:
         h, w, _ = frame.shape
         print(f"[CAM] frame {w}x{h}")
 
+        # Convert to grayscale
         gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
 
+        # Region of Interest
         roi = gray[
             ROI_Y_START : ROI_Y_START + ROI_HEIGHT,
             :
@@ -68,6 +73,7 @@ class CameraLineFollower:
             f"shape={roi.shape}"
         )
 
+        # Threshold (black line on light floor)
         _, binary = cv2.threshold(
             roi,
             THRESH_VAL,
@@ -84,6 +90,7 @@ class CameraLineFollower:
             f"fill_ratio={fill_ratio:.4f}"
         )
 
+        # Reject if line not confidently detected
         if white_px < 200:
             print("[REJECT] too few white pixels → no line")
             return None
@@ -93,6 +100,7 @@ class CameraLineFollower:
             print("[REJECT] zero moment → centroid undefined")
             return None
 
+        # Centroid calculation
         cx = moments["m10"] / moments["m00"]
         center_x = w / 2
         error_px = cx - center_x
@@ -134,11 +142,9 @@ if __name__ == "__main__":
                 sleep(0.1)
                 continue
 
+            # Proportional steering (no deadzone)
             steer = STEER_GAIN * error_px
             steer = max(-MAX_STEER_DEG, min(MAX_STEER_DEG, steer))
-
-            if abs(steer) < STEER_DEADZONE:
-                steer = 0.0
 
             print(
                 f"[CTRL] error_px={error_px:+d} | "
