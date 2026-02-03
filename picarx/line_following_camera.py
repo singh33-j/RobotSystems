@@ -19,7 +19,7 @@ ROI_HEIGHT  = 80
 THRESH_VAL = 120
 
 MAX_STEER_DEG = 30.0
-STEER_GAIN    = 0.3      # no deadzone
+STEER_GAIN    = 0.5      # no deadzone
 
 FORWARD_SPEED = 28
 
