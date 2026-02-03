@@ -12,15 +12,14 @@ from picarx_improved import Picarx
 FRAME_WIDTH  = 320
 FRAME_HEIGHT = 240
 
-# Slightly higher ROI for better anticipation
-ROI_Y_START = 120
-ROI_HEIGHT  = 120
+# MATCHES STREAMER (validated)
+ROI_Y_START = 160
+ROI_HEIGHT  = 80
 
 THRESH_VAL = 120
 
 MAX_STEER_DEG = 30.0
-STEER_GAIN    = 0.3      # <-- increased gain
-# STEER_DEADZONE REMOVED
+STEER_GAIN    = 0.3      # no deadzone
 
 FORWARD_SPEED = 28
 
@@ -62,7 +61,7 @@ class CameraLineFollower:
         # Convert to grayscale
         gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
 
-        # Region of Interest
+        # Region of Interest (EXACT SAME AS STREAM)
         roi = gray[
             ROI_Y_START : ROI_Y_START + ROI_HEIGHT,
             :
@@ -90,7 +89,7 @@ class CameraLineFollower:
             f"fill_ratio={fill_ratio:.4f}"
         )
 
-        # Reject if line not confidently detected
+        # Reject weak detections (blank table / glare)
         if white_px < 200:
             print("[REJECT] too few white pixels → no line")
             return None
@@ -127,6 +126,12 @@ if __name__ == "__main__":
     print("[MAIN] PiCar-X camera line follower starting")
 
     px = Picarx()
+
+    # --- camera tilt (critical) ---
+    print("[INIT] setting camera tilt to -35 deg")
+    px.set_cam_tilt_angle(-35)
+    sleep(0.4)  # let servo settle
+
     follower = CameraLineFollower()
 
     try:
