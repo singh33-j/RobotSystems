@@ -129,7 +129,7 @@ if __name__ == "__main__":
 
     # --- camera tilt (critical) ---
     print("[INIT] setting camera tilt to -35 deg")
-    px.set_cam_tilt_angle(-35)
+    px.set_cam_tilt_angle(-45)
     sleep(0.4)  # let servo settle
 
     follower = CameraLineFollower()

@@ -51,7 +51,7 @@ class Picarx(object):
     DIR_MAX = 30
     CAM_PAN_MIN = -90
     CAM_PAN_MAX = 90
-    CAM_TILT_MIN = -35
+    CAM_TILT_MIN = -45
     CAM_TILT_MAX = 65
 
     PERIOD = 4095
