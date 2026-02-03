@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 from time import sleep
+from picamera2 import Picamera2
 from picarx_improved import Picarx
 
 
@@ -8,8 +9,7 @@ from picarx_improved import Picarx
 # configuration
 # ============================================================
 
-CAM_INDEX = 0
-FRAME_WIDTH = 320
+FRAME_WIDTH  = 320
 FRAME_HEIGHT = 240
 
 ROI_Y_START = 160
@@ -17,40 +17,46 @@ ROI_HEIGHT  = 80
 
 THRESH_VAL = 120
 
-MAX_STEER_DEG = 30.0
-STEER_GAIN = 0.15
-STEER_DEADZONE = 2.0
+MAX_STEER_DEG   = 30.0
+STEER_GAIN      = 0.15
+STEER_DEADZONE  = 2.0
 
 FORWARD_SPEED = 28
 
 
 # ============================================================
-# camera line follower with diagnostics
+# camera line follower (Picamera2, headless)
 # ============================================================
 
 class CameraLineFollower:
     def __init__(self):
-        print("[INIT] opening camera")
-        self.cap = cv2.VideoCapture(CAM_INDEX)
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
+        print("[INIT] starting Picamera2")
 
-        if not self.cap.isOpened():
-            print("[ERROR] camera not opened")
-        else:
-            print("[INIT] camera opened successfully")
+        self.picam2 = Picamera2()
+        self.picam2.configure(
+            self.picam2.create_preview_configuration(
+                main={"size": (FRAME_WIDTH, FRAME_HEIGHT),
+                      "format": "RGB888"}
+            )
+        )
+        self.picam2.start()
+
+        # camera warm-up
+        sleep(0.5)
+
+        print("[INIT] camera started")
 
     def read_error(self):
-        ret, frame = self.cap.read()
+        frame = self.picam2.capture_array()
 
-        if not ret:
+        if frame is None:
             print("[CAM] no frame captured")
             return None
 
         h, w, _ = frame.shape
-        print(f"[CAM] frame size {w}x{h}")
+        print(f"[CAM] frame {w}x{h}")
 
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
 
         roi = gray[
             ROI_Y_START : ROI_Y_START + ROI_HEIGHT,
@@ -75,22 +81,16 @@ class CameraLineFollower:
 
         print(
             f"[THRESH] white_px={white_px} "
-            f"total_px={total_px} "
             f"fill_ratio={fill_ratio:.4f}"
         )
 
         if white_px < 200:
-            print("[REJECT] too few white pixels → likely no line")
-            cv2.imshow("binary", binary)
-            cv2.waitKey(1)
+            print("[REJECT] too few white pixels → no line")
             return None
 
         moments = cv2.moments(binary)
-
         if moments["m00"] == 0:
-            print("[REJECT] zero moment m00 → centroid undefined")
-            cv2.imshow("binary", binary)
-            cv2.waitKey(1)
+            print("[REJECT] zero moment → centroid undefined")
             return None
 
         cx = moments["m10"] / moments["m00"]
@@ -103,35 +103,11 @@ class CameraLineFollower:
             f"error_px={error_px:+.1f}"
         )
 
-        # Visualization
-        vis = cv2.cvtColor(roi, cv2.COLOR_GRAY2BGR)
-
-        cv2.line(
-            vis,
-            (int(center_x), 0),
-            (int(center_x), ROI_HEIGHT),
-            (255, 0, 0),
-            2
-        )
-
-        cv2.circle(
-            vis,
-            (int(cx), ROI_HEIGHT // 2),
-            6,
-            (0, 0, 255),
-            -1
-        )
-
-        cv2.imshow("roi", vis)
-        cv2.imshow("binary", binary)
-        cv2.waitKey(1)
-
         return int(error_px)
 
     def close(self):
-        print("[CLEANUP] releasing camera")
-        self.cap.release()
-        cv2.destroyAllWindows()
+        print("[CLEANUP] stopping camera")
+        self.picam2.stop()
 
 
 # ============================================================
@@ -140,7 +116,7 @@ class CameraLineFollower:
 
 if __name__ == "__main__":
 
-    print("[MAIN] starting PiCar-X line follower")
+    print("[MAIN] PiCar-X camera line follower starting")
 
     px = Picarx()
     follower = CameraLineFollower()
@@ -149,26 +125,24 @@ if __name__ == "__main__":
         while True:
             error_px = follower.read_error()
 
+            # ------------------------------------------------
+            # FAIL-SAFE: stop if vision is lost
+            # ------------------------------------------------
             if error_px is None:
-                print("[CTRL] no error → steering = 0")
-                px.set_dir_servo_angle(0)
-                px.forward(FORWARD_SPEED)
-                sleep(0.05)
+                print("[SAFE] vision lost → STOP")
+                px.stop()
+                sleep(0.1)
                 continue
 
             steer = STEER_GAIN * error_px
             steer = max(-MAX_STEER_DEG, min(MAX_STEER_DEG, steer))
 
             if abs(steer) < STEER_DEADZONE:
-                print(
-                    f"[CTRL] steer {steer:+.2f} "
-                    f"inside deadzone → 0"
-                )
                 steer = 0.0
 
             print(
                 f"[CTRL] error_px={error_px:+d} | "
-                f"steer_cmd={steer:+.2f} deg | "
+                f"steer={steer:+.2f} deg | "
                 f"speed={FORWARD_SPEED}"
             )
 
@@ -178,6 +152,8 @@ if __name__ == "__main__":
             sleep(0.02)
 
     except KeyboardInterrupt:
-        print("\n[EXIT] keyboard interrupt → stopping")
+        print("\n[EXIT] Ctrl-C received → stopping robot")
+
+    finally:
         px.stop()
         follower.close()
